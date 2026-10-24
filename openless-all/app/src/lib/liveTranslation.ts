@@ -128,6 +128,11 @@ export function applyLiveTranslationEvent(
   if (event.kind.type !== 'live_translation_update') {
     return { ...state, sequence };
   }
+  // Once the card is lingering the session is over: late updates (notably the
+  // Unavailable emitted when the translation socket closes after the tail
+  // grace) must not wipe the snapshot — wiping it makes the capsule body flash
+  // for one exit-animation frame. A new session resets `lingering` first.
+  if (state.lingering) return { ...state, sequence };
   // Gate exactly like the transcript rail: drop late events from a session
   // that is not the observed one, and hold updates until the session starts.
   if (state.awaitingSessionStart) return { ...state, sequence };

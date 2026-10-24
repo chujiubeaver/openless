@@ -934,7 +934,10 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
   // Lingering translation card: the session already ended (window would idle-hide)
   // but the user is still reading. Render the card alone; Esc or the next session
   // dismisses it (native keeps the window open via translation_lingering).
-  if (lingeringCardActive && !leaving) {
+  // Note: deliberately NOT gated on `!leaving` — during the capsule exit
+  // animation the main tree would paint one frame of the session body (the
+  // recording/done animation) over the lingering card, which reads as a flash.
+  if (lingeringCardActive) {
     return (
       <div
         style={{

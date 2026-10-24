@@ -122,6 +122,17 @@ linger = lingerLiveTranslation(linger);
 assert(linger.lingering && linger.text === 'Read me later', 'terminal lingers with text');
 linger = clearLiveTranslation(linger);
 assert(linger.text === '' && !linger.lingering, 'Esc dismissal clears text and lingering');
+// A late Unavailable (socket close after the tail grace) must not wipe a
+// lingering card, or the capsule body flashes for one exit-animation frame.
+let late = lingerLiveTranslation(
+  applyLiveTranslationEvent(
+    applyLiveTranslationEvent(createLiveTranslationState(), startingEvent(1, 'h')),
+    updateEvent(2, 'h', 'keep me'),
+  ),
+);
+late = applyLiveTranslationEvent(late, updateEvent(3, 'h', '', 'unavailable'));
+assert(late.text === 'keep me' && late.lingering, 'late unavailable keeps lingering card');
+
 // A new session replaces the lingering snapshot (its first update overwrites).
 let lingered = lingerLiveTranslation(
   applyLiveTranslationEvent(
