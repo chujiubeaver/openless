@@ -5,6 +5,7 @@ import {
   beginLiveTranslationGeneration,
   clearLiveTranslation,
   createLiveTranslationState,
+  lingerLiveTranslation,
   visibleLiveTranslation,
   type LiveTranslationViewState,
 } from './liveTranslation';
@@ -111,5 +112,29 @@ assert(visibleLiveTranslation('Hi', true, 'recording', true) === '', 'selection 
 assert(visibleLiveTranslation('Hi', true, 'idle', false) === '', 'idle hides');
 assert(visibleLiveTranslation('Hi', true, 'done', false) === '', 'done hides');
 assert(visibleLiveTranslation('Hi', true, 'polishing', false) === 'Hi', 'settling window shows');
+
+console.log('liveTranslation.test.ts: all assertions passed');
+
+// Lingering: the session end keeps the snapshot readable; Esc clears it.
+let linger = applyLiveTranslationEvent(createLiveTranslationState(), startingEvent(1, 'e'));
+linger = applyLiveTranslationEvent(linger, updateEvent(2, 'e', 'Read me later'));
+linger = lingerLiveTranslation(linger);
+assert(linger.lingering && linger.text === 'Read me later', 'terminal lingers with text');
+linger = clearLiveTranslation(linger);
+assert(linger.text === '' && !linger.lingering, 'Esc dismissal clears text and lingering');
+// A new session replaces the lingering snapshot (its first update overwrites).
+let lingered = lingerLiveTranslation(
+  applyLiveTranslationEvent(
+    applyLiveTranslationEvent(createLiveTranslationState(), startingEvent(1, 'f')),
+    updateEvent(2, 'f', 'old session'),
+  ),
+);
+assert(lingered.lingering, 'old session lingers');
+let fresh = applyLiveTranslationEvent(lingered, startingEvent(3, 'g'));
+assert(!fresh.lingering && fresh.text === '', 'new session clears lingering snapshot');
+fresh = beginLiveTranslationGeneration(fresh);
+assert(!fresh.lingering && fresh.text === '', 'new generation keeps it cleared');
+// An empty snapshot never lingers (nothing to keep on screen).
+assert(!lingerLiveTranslation(createLiveTranslationState()).lingering, 'empty never lingers');
 
 console.log('liveTranslation.test.ts: all assertions passed');

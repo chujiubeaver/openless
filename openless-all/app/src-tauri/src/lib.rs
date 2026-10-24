@@ -371,6 +371,7 @@ macro_rules! app_invoke_handler_desktop {
             commands::voice_edit_window_open,
             commands::voice_edit_window_close,
             commands::set_capsule_transcript_visible,
+            commands::set_capsule_translation_lingering,
             coding_agent::commands::coding_agent_detect,
             coding_agent::commands::coding_agent_detect_opencode,
             coding_agent::commands::coding_agent_detect_cli,

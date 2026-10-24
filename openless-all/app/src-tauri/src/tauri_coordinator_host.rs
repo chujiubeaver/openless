@@ -777,6 +777,7 @@ enum CapsuleWindowAction {
 
 fn capsule_window_action(
     fallback_card_active: bool,
+    translation_lingering: bool,
     show_capsule: bool,
     state: CapsuleState,
     qa_voice_active: bool,
@@ -785,6 +786,10 @@ fn capsule_window_action(
         CapsuleWindowAction::HideCapsule
     } else if fallback_card_active {
         CapsuleWindowAction::PreserveFallbackCard
+    } else if translation_lingering && matches!(state, CapsuleState::Idle) {
+        // The translation card is still on screen after the session ended;
+        // keep the window so the user can finish reading it.
+        CapsuleWindowAction::ShowCapsule
     } else if show_capsule && !matches!(state, CapsuleState::Idle) {
         CapsuleWindowAction::ShowCapsule
     } else {
@@ -851,6 +856,9 @@ struct CapsuleWindowState {
     /// and is wider than the capsule body.
     transcript_rail_height: Mutex<Option<f64>>,
     transcript_rail_width: Mutex<Option<f64>>,
+    /// The wrapped translation card outlives its recording session (until Esc
+    /// or the next session) and keeps the capsule window open through Idle.
+    translation_lingering: AtomicBool,
     style: AtomicU8,
     display_mode: AtomicU8,
     foreground_monitor: Mutex<Option<crate::capsule_mirrors::MonitorRect>>,
@@ -880,6 +888,7 @@ impl Default for CapsuleWindowState {
             transcript_visible: AtomicBool::new(false),
             transcript_rail_height: Mutex::new(None),
             transcript_rail_width: Mutex::new(None),
+            translation_lingering: AtomicBool::new(false),
             style: AtomicU8::new(0),
             display_mode: AtomicU8::new(0),
             foreground_monitor: Mutex::new(None),
@@ -1619,6 +1628,48 @@ impl TauriCapsuleWindow {
         ))
     }
 
+    /// Keep the capsule window open after the session ends so the wrapped
+    /// translation card stays readable; the webview renders the card alone.
+    pub(crate) fn set_translation_lingering(&self, active: bool) -> tauri::Result<()> {
+        let was = self.state.translation_lingering.swap(active, Ordering::SeqCst);
+        if was == active {
+            return Ok(());
+        }
+        if !active {
+            let idle = self
+                .state
+                .snapshot
+                .lock()
+                .payload
+                .as_ref()
+                .is_some_and(|payload| matches!(payload.state, CapsuleState::Idle));
+            if idle && !self.state.capsule_visible.load(Ordering::SeqCst) {
+                return Ok(());
+            }
+            if idle {
+                self.state.capsule_visible.store(false, Ordering::SeqCst);
+                hide_capsule_window_if_present();
+                let _ = self.hide();
+            }
+        }
+        Ok(())
+    }
+
+    /// Global Esc: dismiss a lingering translation card instead of cancelling
+    /// a (nonexistent) recording. Returns whether a card was dismissed.
+    pub(crate) fn dismiss_translation_lingering(&self) -> bool {
+        if !self.state.translation_lingering.load(Ordering::SeqCst) {
+            return false;
+        }
+        if self.set_translation_lingering(false).is_err() {
+            return false;
+        }
+        if let Some(window) = self.window() {
+            let _ = window.emit("capsule:translation-dismiss", ());
+        }
+        true
+    }
+
     /// Current rail-size overrides from the webview, if any.
     fn transcript_rail_height_override(&self) -> Option<f64> {
         *self.state.transcript_rail_height.lock()
@@ -1957,7 +2008,13 @@ impl TauriCapsuleWindow {
         let fallback_card_active = self.state.defer_if_fallback_active(payload);
 
         {
-            let action = capsule_window_action(fallback_card_active, show_capsule, payload.state, self.state.qa_voice_active.load(Ordering::SeqCst));
+            let action = capsule_window_action(
+                fallback_card_active,
+                self.state.translation_lingering.load(Ordering::SeqCst),
+                show_capsule,
+                payload.state,
+                self.state.qa_voice_active.load(Ordering::SeqCst),
+            );
             if action == CapsuleWindowAction::PreserveFallbackCard {
                 log::debug!(
                     "[capsule] native window update deferred: insert fallback card owns the window"

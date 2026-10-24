@@ -486,9 +486,11 @@
 
 /* The fade exists only to hint at hidden lines above; applying it unconditionally
    clipped the first visible line (user report 2026-10). */
+/* Only a short, light fade at the very top: enough to hint that lines are
+   hidden above, without washing out the first visible line (user report). */
 .ol-live-translation-frame[data-overflowed='true'] {
-  -webkit-mask-image: linear-gradient(to bottom, transparent, #000 26px);
-  mask-image: linear-gradient(to bottom, transparent, #000 26px);
+  -webkit-mask-image: linear-gradient(to bottom, rgba(0, 0, 0, 0.55), #000 8px);
+  mask-image: linear-gradient(to bottom, rgba(0, 0, 0, 0.55), #000 8px);
 }
 
 .ol-live-translation-text {

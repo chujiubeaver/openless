@@ -21,6 +21,16 @@ use super::*;
 /// set flag + release resources, no await).
 pub(super) fn esc_cancel_bridge_loop(inner: Arc<Inner>, rx: mpsc::Receiver<()>) {
     esc_cancel_bridge_loop_with(inner, rx, |inner| {
+        // A lingering translation card owns Esc first: dismiss it without
+        // touching any recording.
+        let dismissed = inner
+            .host
+            .capsule_window()
+            .map(|capsule| capsule.dismiss_translation_lingering())
+            .unwrap_or(false);
+        if dismissed {
+            return;
+        }
         inner
             .host
             .block_on(super::dictation::cancel_active_session(inner));

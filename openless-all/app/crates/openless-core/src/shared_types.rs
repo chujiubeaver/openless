@@ -4040,6 +4040,10 @@ mod live_translation_preview_preference_tests {
         let restored: UserPreferences =
             serde_json::from_slice(&serde_json::to_vec(&prefs).unwrap()).unwrap();
         assert!(restored.live_translation_preview_enabled);
+    }
+}
+
+#[cfg(test)]
 mod low_memory_background_preferences_tests {
     use super::UserPreferences;
 

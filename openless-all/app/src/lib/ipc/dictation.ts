@@ -32,6 +32,15 @@ export function setCapsuleTranscriptVisible(
   );
 }
 
+/**
+ * Keep the capsule window open after the session ends so the wrapped
+ * translation card stays readable until Esc or the next session.
+ */
+export function setCapsuleTranslationLingering(active: boolean): Promise<void> {
+  if (!isDesktop()) return Promise.resolve();
+  return invokeOrMock('set_capsule_translation_lingering', { active }, () => undefined);
+}
+
 /** Latest native capsule frame, used by the separate Windows rail after its webview is ready. */
 export function getCapsuleSnapshot(): Promise<CapsuleSnapshot | null> {
   if (!isDesktop()) return Promise.resolve(null);

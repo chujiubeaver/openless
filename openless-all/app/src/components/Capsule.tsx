@@ -12,7 +12,12 @@ import {
 } from './LiveTranscriptPill';
 import { capsuleTranscriptFontSize, visibleCapsuleTranscript } from '../lib/capsuleTranscript';
 import { getSettings } from '../lib/ipc/settings';
-import { cancelDictation, setCapsuleTranscriptVisible, stopDictation } from '../lib/ipc/dictation';
+import {
+  cancelDictation,
+  setCapsuleTranscriptVisible,
+  setCapsuleTranslationLingering,
+  stopDictation,
+} from '../lib/ipc/dictation';
 import {
   getCapsuleHostMetrics,
   getCapsulePillMetrics,
@@ -52,6 +57,7 @@ import {
   beginLiveTranslationGeneration,
   clearLiveTranslation,
   createLiveTranslationState,
+  lingerLiveTranslation,
   visibleLiveTranslation,
   type LiveTranslationViewState,
 } from '../lib/liveTranslation';
@@ -416,6 +422,7 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
   // never becomes insertable text.
   const liveTranslationRef = useRef<LiveTranslationViewState>(createLiveTranslationState());
   const [liveTranslationText, setLiveTranslationText] = useState('');
+  const [liveTranslationLingering, setLiveTranslationLingering] = useState(false);
   const capsuleStateRef = useRef<CapsuleState>(preview.state);
   const [translation, setTranslation] = useState<boolean>(preview.translation);
   const [selectionPolish, setSelectionPolish] = useState<boolean>(preview.selectionPolish);
@@ -554,11 +561,19 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
           p.state === 'cancelled' ||
           p.state === 'error'
         ) {
-          nextTranslation = clearLiveTranslation(nextTranslation);
+          // Keep the snapshot readable after the session ends; the card stays
+          // until Esc or the next session (user request 2026-10).
+          nextTranslation = lingerLiveTranslation(nextTranslation);
         }
         liveTranslationRef.current = nextTranslation;
         if (nextTranslation !== previousTranslation) {
           setLiveTranslationText(nextTranslation.text);
+        }
+        if (nextTranslation.lingering !== previousTranslation.lingering) {
+          setLiveTranslationLingering(nextTranslation.lingering);
+          void setCapsuleTranslationLingering(nextTranslation.lingering).catch((error) =>
+            console.warn('[capsule] translation lingering sync failed', error),
+          );
         }
         setTranslation(p.translation === true);
         setWarming(p.warming === true);
@@ -804,20 +819,34 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
   );
   const showTranslationPreview =
     state !== 'idle' && !showLiveTranscript && liveTranslationPreview.length > 0;
+  // While lingering, keep the card on screen through the terminal states too so
+  // it does not flicker away at "done" before the idle card-only view takes over.
+  const lingeringText = liveTranslationLingering ? liveTranslationText.trim() : '';
+  const cardText = showTranslationPreview
+    ? liveTranslationPreview
+    : lingeringText && ['done', 'cancelled', 'error'].includes(state) && !showLiveTranscript
+      ? lingeringText
+      : '';
+  const showCard = cardText.length > 0 && !insertFallback && suggestions.length === 0;
   const translationPreviewVisible =
     showTranslationPreview && !insertFallback && suggestions.length === 0;
+  // After the session ends the card lingers alone in the window until Esc or
+  // the next session; the native window must stay sized for it.
+  const lingeringCardActive =
+    liveTranslationLingering && liveTranslationText.trim().length > 0;
+  const translationCardActive = translationPreviewVisible || lingeringCardActive;
   // The native window geometry follows whichever text occupies the rail slot.
-  const capsuleRailVisible = transcriptVisible || translationPreviewVisible;
+  const capsuleRailVisible = transcriptVisible || translationCardActive;
   // The wrapped translation card needs a taller rail than the one-line
   // transcript pill; the native window grows by exactly this budget
   // (getCapsuleTranslationRailHeight mirrors the Rust override math).
   const translationTextHeight = getCapsuleTranslationTextHeight(transcriptFontSize);
   const translationCard = { maxHeight: translationTextHeight };
   const translationRailHeight = getCapsuleTranslationRailHeight(capsuleStyle, transcriptFontSize);
-  const capsuleRailHeight = translationPreviewVisible ? translationRailHeight : undefined;
+  const capsuleRailHeight = translationCardActive ? translationRailHeight : undefined;
   // The card is wider than the 460px capsule body: the native window must
   // grow horizontally too, or the webview clips the card at the window edge.
-  const capsuleRailWidth = translationPreviewVisible
+  const capsuleRailWidth = translationCardActive
     ? getCapsuleTranslationWindowWidth(capsuleStyle)
     : undefined;
 
@@ -838,6 +867,29 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
     };
   }, []);
 
+  // Global Esc dismisses a lingering translation card. Kept in its own effect so
+  // the replay effect's listener count (asserted by capsule-ready-replay) is stable.
+  useEffect(() => {
+    if (!isTauri) return;
+    let unlisten: (() => void) | undefined;
+    let cancelled = false;
+    (async () => {
+      const { listen } = await import('@tauri-apps/api/event');
+      const handle = await listen('capsule:translation-dismiss', () => {
+        liveTranslationRef.current = clearLiveTranslation(liveTranslationRef.current);
+        setLiveTranslationText('');
+        setLiveTranslationLingering(false);
+        void setCapsuleTranslationLingering(false).catch(() => {});
+      });
+      if (cancelled) handle();
+      else unlisten = handle;
+    })().catch((error) => console.warn('[capsule] translation dismiss listener failed', error));
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
+
   // Fallback card comes first: it pops the moment the session ends, while the capsule
   // is still rendering the Done/Error terminal state — and the session's outcome was
   // exactly "didn't insert", so letting the terminal state cover it would report a
@@ -852,6 +904,35 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
   // the backend dismisses it when a new dictation starts (see begin_session_as).
   if (suggestions.length > 0) {
     return <VocabSuggestionCard suggestions={suggestions} />;
+  }
+
+  // Lingering translation card: the session already ended (window would idle-hide)
+  // but the user is still reading. Render the card alone; Esc or the next session
+  // dismisses it (native keeps the window open via translation_lingering).
+  if (lingeringCardActive && state === 'idle' && !leaving) {
+    return (
+      <div
+        style={{
+          width: '100%',
+          height: '100%',
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          justifyContent: 'flex-end',
+          paddingBottom: 16,
+          boxSizing: 'border-box',
+          background: 'transparent',
+        }}
+      >
+        <LiveTranslationCard
+          text={liveTranslationText}
+          fontSize={transcriptFontSize}
+          maxWidth={CAPSULE_TRANSLATION_CARD_MAX_WIDTH}
+          maxHeight={translationTextHeight}
+          tag={t('capsule.liveTranslationTag')}
+        />
+      </div>
+    );
   }
 
   // Truly unmounted: state is idle and no exit animation is running.
@@ -898,9 +979,7 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
             insertedChars={insertedCharsRef.current}
             message={renderedMessage}
             transcript={splitTranscriptRail ? '' : liveTranscript}
-            translationPreview={
-              splitTranscriptRail || showLiveTranscript ? '' : liveTranslationPreview
-            }
+            translationPreview={splitTranscriptRail || showLiveTranscript ? '' : cardText}
             translationCard={translationCard}
             transcriptFontSize={transcriptFontSize}
             transcriptVisible={capsuleRailVisible}
@@ -971,9 +1050,9 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
                   height={getCapsuleTranscriptRailHeight('siri')}
                 />
               )}
-              {showTranslationPreview && !splitTranscriptRail && (
+              {showCard && !splitTranscriptRail && (
                 <LiveTranslationCard
-                  text={liveTranslationPreview}
+                  text={cardText}
                   fontSize={transcriptFontSize}
                   maxWidth={CAPSULE_TRANSLATION_CARD_MAX_WIDTH}
                   maxHeight={translationTextHeight}

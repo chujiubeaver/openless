@@ -61,7 +61,7 @@ async fn main() -> Result<()> {
 
     let update = session_update(variant)?;
     println!("# >>> {update}");
-    write.send(Message::Text(update)).await?;
+    write.send(Message::Text(update.into())).await?;
 
     // 收事件：session.updated / error / 其它，最多 6 条或 10 秒
     let mut got_ready = false;
@@ -106,7 +106,7 @@ async fn main() -> Result<()> {
             "audio": base64::engine::general_purpose::STANDARD.encode(silence),
         })
         .to_string();
-        write.send(Message::Text(audio)).await?;
+        write.send(Message::Text(audio.into())).await?;
         write.send(Message::Text(r#"{"type":"session.finish"}"#.into()))
             .await?;
         for _ in 0..6 {

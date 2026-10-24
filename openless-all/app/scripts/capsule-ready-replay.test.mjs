@@ -87,6 +87,7 @@ function mount({
     insertedCharsRef: { current: 0 },
     operatingRef: { current: false },
     parseCapsuleStyle: () => undefined,
+    setCapsuleTranslationLingering: () => Promise.resolve(),
     console: { info() {}, warn: (...args) => warnings.push(args) },
     window: {
       setTimeout: (done, delay) => {
@@ -127,6 +128,7 @@ function mount({
     'setMessage',
     'setLocalAsrText',
     'setLiveTranslationText',
+    'setLiveTranslationLingering',
     'setTranslation',
     'setWarming',
     'setSelectionPolish',

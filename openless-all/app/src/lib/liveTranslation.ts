@@ -28,6 +28,8 @@ export interface LiveTranslationViewState {
   sessionStartObserved: boolean;
   /** Sticky per generation: once unavailable the row stays hidden. */
   unavailable: boolean;
+  /** Session ended but the card stays on screen until Esc or the next session. */
+  lingering: boolean;
 }
 
 export function createLiveTranslationState(): LiveTranslationViewState {
@@ -38,6 +40,7 @@ export function createLiveTranslationState(): LiveTranslationViewState {
     awaitingSessionStart: false,
     sessionStartObserved: false,
     unavailable: false,
+    lingering: false,
   };
 }
 
@@ -56,14 +59,24 @@ export function beginLiveTranslationGeneration(
     sessionId: reuseStartedSession ? state.sessionId : null,
     text: reuseStartedSession ? state.text : '',
     unavailable: reuseStartedSession ? state.unavailable : false,
+    lingering: false,
     awaitingSessionStart: !reuseStartedSession,
     sessionStartObserved: false,
   };
 }
 
-/** Terminal capsule states clear the row; the next generation re-arms it. */
+/** Esc / explicit dismissal: drop the card entirely. */
 export function clearLiveTranslation(state: LiveTranslationViewState): LiveTranslationViewState {
-  return { ...state, text: '', unavailable: false, sessionStartObserved: false };
+  return { ...state, text: '', unavailable: false, lingering: false, sessionStartObserved: false };
+}
+
+/**
+ * The session ended but the user may still be reading: keep the snapshot and
+ * mark it lingering so the capsule window stays open showing the card alone.
+ */
+export function lingerLiveTranslation(state: LiveTranslationViewState): LiveTranslationViewState {
+  if (!state.text.trim()) return { ...state, lingering: false };
+  return { ...state, lingering: true };
 }
 
 /** Apply the session id carried by capsule:state before backend:event. */
@@ -77,6 +90,7 @@ export function applyLiveTranslationSessionId(
     sessionId,
     text: '',
     unavailable: false,
+    lingering: false,
     awaitingSessionStart: false,
     sessionStartObserved: true,
   };
@@ -98,6 +112,7 @@ export function applyLiveTranslationEvent(
         sequence,
         text: '',
         unavailable: false,
+        lingering: false,
         awaitingSessionStart: false,
         sessionStartObserved: true,
       };

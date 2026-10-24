@@ -756,7 +756,7 @@ async fn send_text(writer: &SharedWriter, text: String) -> Result<(), LiveTransl
                 "websocket writer not available".to_string(),
             ));
         };
-        ws.send(Message::Text(text))
+        ws.send(Message::Text(text.into()))
             .await
             .map_err(|e| LiveTranslateError::SendFailed(e.to_string()))
     })

@@ -78,6 +78,23 @@ pub async fn set_capsule_transcript_visible(
     })
 }
 
+#[cfg(not(mobile))]
+#[tauri::command]
+pub async fn set_capsule_translation_lingering(
+    coord: CoordinatorState<'_>,
+    active: bool,
+) -> Result<(), String> {
+    let host = coord.tauri_host();
+    let Some(capsule) = host.capsule_window() else {
+        return Ok(());
+    };
+    host.run_on_main_thread(move || {
+        if let Err(error) = capsule.set_translation_lingering(active) {
+            log::warn!("[capsule] translation lingering layout failed: {error}");
+        }
+    })
+}
+
 #[tauri::command]
 pub async fn handle_window_hotkey_event(
     coord: CoordinatorState<'_>,
