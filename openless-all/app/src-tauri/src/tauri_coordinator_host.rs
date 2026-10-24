@@ -2104,6 +2104,20 @@ impl TauriCapsuleWindow {
         self.prepare_display_target(payload, &window);
         let fallback_card_active = self.state.defer_if_fallback_active(payload);
 
+        // A new dictation session supersedes a lingering translation card: clear
+        // it natively here so the window returns to the dock immediately, even
+        // if the webview's dismissal IPC has not arrived yet (race). Without
+        // this the recording animation would be laid out at the compact card
+        // geometry and appear to "drift" onto the translation card.
+        if self.state.translation_lingering.load(Ordering::SeqCst)
+            && matches!(
+                payload.state,
+                CapsuleState::Recording | CapsuleState::Transcribing | CapsuleState::Polishing
+            )
+        {
+            let _ = self.set_translation_lingering(false, 0.0, 0.0, 0.0);
+        }
+
         {
             let action = capsule_window_action(
                 fallback_card_active,
