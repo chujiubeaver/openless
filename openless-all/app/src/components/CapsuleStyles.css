@@ -463,6 +463,52 @@
   text-align: left;
 }
 
+/* Lingering (interactive) mode: the card accepts the mouse so it can be
+   dragged, closed and its text selected; layout stacks grip above the text. */
+.ol-live-translation-card[data-interactive='true'] {
+  flex-direction: column;
+  align-items: stretch;
+  pointer-events: auto;
+  cursor: default;
+}
+
+.ol-live-translation-card[data-interactive='true'] .ol-live-translation-text {
+  user-select: text;
+  -webkit-user-select: text;
+  cursor: text;
+}
+
+.ol-live-translation-grip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  padding-bottom: 4px;
+  cursor: grab;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.ol-live-translation-grip:active {
+  cursor: grabbing;
+}
+
+.ol-live-translation-close {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: var(--ol-capsule-btn-bg);
+  color: var(--ol-capsule-btn-ink);
+  cursor: pointer;
+}
+
 .ol-live-translation-card[data-tone='dark'] {
   background: var(--ol-typeless-bg, #18181b);
   border-color: var(--ol-typeless-border, #52525b);

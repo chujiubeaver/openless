@@ -372,6 +372,8 @@ macro_rules! app_invoke_handler_desktop {
             commands::voice_edit_window_close,
             commands::set_capsule_transcript_visible,
             commands::set_capsule_translation_lingering,
+            commands::begin_capsule_translation_drag,
+            commands::drag_capsule_translation,
             coding_agent::commands::coding_agent_detect,
             coding_agent::commands::coding_agent_detect_opencode,
             coding_agent::commands::coding_agent_detect_cli,
@@ -2226,7 +2228,7 @@ fn logical_monitor_frame(
     }
 }
 
-fn bottom_center_position(
+pub(crate) fn bottom_center_position(
     frame: LogicalMonitorFrame,
     window_width: f64,
     window_height: f64,
@@ -3749,7 +3751,7 @@ fn capsule_window_bounds(translation_active: bool) -> CapsuleWindowBounds {
 
 /// Logical gap between the capsule and the work-area bottom edge (the work area already
 /// excludes the Dock / taskbar). Typeless hugs the edge.
-fn capsule_bottom_gap(style: types::CapsuleStyle) -> f64 {
+pub(crate) fn capsule_bottom_gap(style: types::CapsuleStyle) -> f64 {
     const EDGE_GAP: f64 = 12.0;
     match style {
         types::CapsuleStyle::Typeless => 0.0,

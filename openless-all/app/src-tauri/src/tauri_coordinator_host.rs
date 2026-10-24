@@ -859,6 +859,14 @@ struct CapsuleWindowState {
     /// The wrapped translation card outlives its recording session (until Esc
     /// or the next session) and keeps the capsule window open through Idle.
     translation_lingering: AtomicBool,
+    /// Lingering card window geometry (logical px): the card owns a compact
+    /// window raised above the normal capsule dock so it never moves when the
+    /// session body disappears.
+    lingering_card_size: Mutex<(f64, f64)>,
+    lingering_bottom_offset: Mutex<f64>,
+    /// Drag session origin (window position at pointer-down) for free placement.
+    drag_origin: Mutex<Option<(i32, i32)>>,
+    free_position: AtomicBool,
     style: AtomicU8,
     display_mode: AtomicU8,
     foreground_monitor: Mutex<Option<crate::capsule_mirrors::MonitorRect>>,
@@ -889,6 +897,10 @@ impl Default for CapsuleWindowState {
             transcript_rail_height: Mutex::new(None),
             transcript_rail_width: Mutex::new(None),
             translation_lingering: AtomicBool::new(false),
+            lingering_card_size: Mutex::new((0.0, 0.0)),
+            lingering_bottom_offset: Mutex::new(0.0),
+            drag_origin: Mutex::new(None),
+            free_position: AtomicBool::new(false),
             style: AtomicU8::new(0),
             display_mode: AtomicU8::new(0),
             foreground_monitor: Mutex::new(None),
@@ -1630,12 +1642,27 @@ impl TauriCapsuleWindow {
 
     /// Keep the capsule window open after the session ends so the wrapped
     /// translation card stays readable; the webview renders the card alone.
-    pub(crate) fn set_translation_lingering(&self, active: bool) -> tauri::Result<()> {
+    pub(crate) fn set_translation_lingering(
+        &self,
+        active: bool,
+        card_width: f64,
+        card_height: f64,
+        bottom_offset: f64,
+    ) -> tauri::Result<()> {
         let was = self.state.translation_lingering.swap(active, Ordering::SeqCst);
+        if active {
+            *self.state.lingering_card_size.lock() = (card_width, card_height);
+            *self.state.lingering_bottom_offset.lock() = bottom_offset;
+        }
         if was == active {
+            if active {
+                self.position_lingering_card();
+            }
             return Ok(());
         }
         if !active {
+            *self.state.drag_origin.lock() = None;
+            self.state.free_position.store(false, Ordering::SeqCst);
             let idle = self
                 .state
                 .snapshot
@@ -1651,8 +1678,67 @@ impl TauriCapsuleWindow {
                 hide_capsule_window_if_present();
                 let _ = self.hide();
             }
+        } else {
+            self.position_lingering_card();
         }
         Ok(())
+    }
+
+    /// Place the compact lingering-card window: same horizontal center as the
+    /// capsule but raised by the stored offset so the card does not move when
+    /// the session body disappears. Honors a user drag (free_position).
+    fn position_lingering_card(&self) {
+        if self.state.free_position.load(Ordering::SeqCst) {
+            return;
+        }
+        let Some(window) = self.window() else {
+            return;
+        };
+        let (width, height) = *self.state.lingering_card_size.lock();
+        let offset = *self.state.lingering_bottom_offset.lock();
+        if width <= 0.0 || height <= 0.0 {
+            return;
+        }
+        let style = self.state.cached_style();
+        #[cfg(target_os = "macos")]
+        if let Some(mon) = crate::capsule_target_monitor(&window) {
+            let gap = crate::capsule_bottom_gap(style) + offset;
+            let (x, y) =
+                crate::bottom_center_position(mon.logical_work_area(), width, height, gap);
+            let _ = window.set_size(tauri::LogicalSize::new(width, height));
+            let _ = window.set_position(tauri::LogicalPosition::new(x, y));
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = (window, style, width, height, offset);
+        }
+    }
+
+    /// Drag support: remember the window position at pointer-down.
+    pub(crate) fn begin_translation_drag(&self) {
+        let Some(window) = self.window() else {
+            return;
+        };
+        if let Ok(pos) = window.outer_position() {
+            *self.state.drag_origin.lock() = Some((pos.x, pos.y));
+            self.state.free_position.store(true, Ordering::SeqCst);
+            self.stop_layout_watch();
+        }
+    }
+
+    /// Drag support: move the window to origin + delta.
+    pub(crate) fn drag_translation_to(&self, dx: f64, dy: f64) {
+        let Some(window) = self.window() else {
+            return;
+        };
+        let Some((ox, oy)) = *self.state.drag_origin.lock() else {
+            return;
+        };
+        let scale = window.scale_factor().unwrap_or(1.0);
+        let _ = window.set_position(tauri::PhysicalPosition::new(
+            ox + (dx * scale) as i32,
+            oy + (dy * scale) as i32,
+        ));
     }
 
     /// Global Esc: dismiss a lingering translation card instead of cancelling
@@ -1661,9 +1747,10 @@ impl TauriCapsuleWindow {
         if !self.state.translation_lingering.load(Ordering::SeqCst) {
             return false;
         }
-        if self.set_translation_lingering(false).is_err() {
+        if self.set_translation_lingering(false, 0.0, 0.0, 0.0).is_err() {
             return false;
         }
+        let _ = self.set_cursor_passthrough(true);
         if let Some(window) = self.window() {
             let _ = window.emit("capsule:translation-dismiss", ());
         }
@@ -1840,6 +1927,12 @@ impl TauriCapsuleWindow {
         style: CapsuleStyle,
     ) {
         if self.state.translation_menu.lock().is_some() { return; }
+        // While the translation card lingers it owns a compact, freely-placed
+        // window; the stack geometry must not yank it back to the dock.
+        if self.state.translation_lingering.load(Ordering::SeqCst) {
+            self.position_lingering_card();
+            return;
+        }
         let Some(next) = self.layout_snapshot(window, translation_active, style) else {
             return;
         };
@@ -1956,12 +2049,15 @@ impl TauriCapsuleWindow {
     fn update_cursor_for_payload(&self, payload: &CapsulePayload, style: CapsuleStyle) {
         #[cfg(not(mobile))]
         {
-            let interactive = style != CapsuleStyle::Siri
-                && !payload.selection_polish
-                && matches!(
-                    payload.state,
-                    CapsuleState::Recording | CapsuleState::Transcribing | CapsuleState::Polishing
-                );
+            let interactive = self.state.translation_lingering.load(Ordering::SeqCst)
+                || (style != CapsuleStyle::Siri
+                    && !payload.selection_polish
+                    && matches!(
+                        payload.state,
+                        CapsuleState::Recording
+                            | CapsuleState::Transcribing
+                            | CapsuleState::Polishing
+                    ));
             let want_passthrough = !interactive;
             if self.state.cursor_passthrough.load(Ordering::SeqCst) != want_passthrough {
                 if let Err(error) = self.set_cursor_passthrough(want_passthrough) {
@@ -2038,7 +2134,11 @@ impl TauriCapsuleWindow {
                 // placement cached while it was visible must not be reused on the next show.
                 self.invalidate_layout();
             }
-            self.maybe_position_capsule_bottom_center(&window, payload.translation, style);
+            if self.state.translation_lingering.load(Ordering::SeqCst) {
+                self.position_lingering_card();
+            } else {
+                self.maybe_position_capsule_bottom_center(&window, payload.translation, style);
+            }
             self.update_cursor_for_payload(payload, style);
             self.sync_capsule_mirrors();
 

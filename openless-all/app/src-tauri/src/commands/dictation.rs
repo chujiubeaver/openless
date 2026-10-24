@@ -83,16 +83,45 @@ pub async fn set_capsule_transcript_visible(
 pub async fn set_capsule_translation_lingering(
     coord: CoordinatorState<'_>,
     active: bool,
+    card_width: f64,
+    card_height: f64,
+    bottom_offset: f64,
 ) -> Result<(), String> {
     let host = coord.tauri_host();
     let Some(capsule) = host.capsule_window() else {
         return Ok(());
     };
     host.run_on_main_thread(move || {
-        if let Err(error) = capsule.set_translation_lingering(active) {
+        if let Err(error) =
+            capsule.set_translation_lingering(active, card_width, card_height, bottom_offset)
+        {
             log::warn!("[capsule] translation lingering layout failed: {error}");
         }
     })
+}
+
+#[cfg(not(mobile))]
+#[tauri::command]
+pub async fn begin_capsule_translation_drag(coord: CoordinatorState<'_>) -> Result<(), String> {
+    let host = coord.tauri_host();
+    let Some(capsule) = host.capsule_window() else {
+        return Ok(());
+    };
+    host.run_on_main_thread(move || capsule.begin_translation_drag())
+}
+
+#[cfg(not(mobile))]
+#[tauri::command]
+pub async fn drag_capsule_translation(
+    coord: CoordinatorState<'_>,
+    dx: f64,
+    dy: f64,
+) -> Result<(), String> {
+    let host = coord.tauri_host();
+    let Some(capsule) = host.capsule_window() else {
+        return Ok(());
+    };
+    host.run_on_main_thread(move || capsule.drag_translation_to(dx, dy))
 }
 
 #[tauri::command]

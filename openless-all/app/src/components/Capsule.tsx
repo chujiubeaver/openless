@@ -13,7 +13,9 @@ import {
 import { capsuleTranscriptFontSize, visibleCapsuleTranscript } from '../lib/capsuleTranscript';
 import { getSettings } from '../lib/ipc/settings';
 import {
+  beginCapsuleTranslationDrag,
   cancelDictation,
+  dragCapsuleTranslation,
   setCapsuleTranscriptVisible,
   setCapsuleTranslationLingering,
   stopDictation,
@@ -23,6 +25,9 @@ import {
   getCapsulePillMetrics,
   getClassicCapsuleGeometry,
   getCapsuleTranscriptRailHeight,
+  CAPSULE_TRANSLATION_GRIP_HEIGHT,
+  getCapsuleLingeringBottomOffset,
+  getCapsuleTranslationCardHeight,
   getCapsuleTranslationRailHeight,
   getCapsuleTranslationTextHeight,
   getCapsuleTranslationWindowWidth,
@@ -571,9 +576,6 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
         }
         if (nextTranslation.lingering !== previousTranslation.lingering) {
           setLiveTranslationLingering(nextTranslation.lingering);
-          void setCapsuleTranslationLingering(nextTranslation.lingering).catch((error) =>
-            console.warn('[capsule] translation lingering sync failed', error),
-          );
         }
         setTranslation(p.translation === true);
         setWarming(p.warming === true);
@@ -832,8 +834,7 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
     showTranslationPreview && !insertFallback && suggestions.length === 0;
   // After the session ends the card lingers alone in the window until Esc or
   // the next session; the native window must stay sized for it.
-  const lingeringCardActive =
-    liveTranslationLingering && liveTranslationText.trim().length > 0;
+  const lingeringCardActive = liveTranslationLingering && liveTranslationText.trim().length > 0;
   const translationCardActive = translationPreviewVisible || lingeringCardActive;
   // The native window geometry follows whichever text occupies the rail slot.
   const capsuleRailVisible = transcriptVisible || translationCardActive;
@@ -867,6 +868,33 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
     };
   }, []);
 
+  // Tell the native host to swap the capsule window for the compact lingering
+  // card window (raised so the card does not move when the session body hides).
+  useEffect(() => {
+    if (!isTauri) return;
+    if (liveTranslationLingering) {
+      const cardHeight =
+        getCapsuleTranslationCardHeight(transcriptFontSize) + CAPSULE_TRANSLATION_GRIP_HEIGHT + 6;
+      void setCapsuleTranslationLingering(
+        true,
+        getCapsuleTranslationWindowWidth(capsuleStyle),
+        cardHeight,
+        getCapsuleLingeringBottomOffset(os, capsuleStyle),
+      ).catch((error) => console.warn('[capsule] translation lingering sync failed', error));
+    } else {
+      void setCapsuleTranslationLingering(false).catch((error) =>
+        console.warn('[capsule] translation lingering sync failed', error),
+      );
+    }
+  }, [liveTranslationLingering, capsuleStyle, transcriptFontSize, os]);
+
+  // Dismiss a lingering translation card (Esc, close button, or new session).
+  const dismissLingeringTranslation = useCallback(() => {
+    liveTranslationRef.current = clearLiveTranslation(liveTranslationRef.current);
+    setLiveTranslationText('');
+    setLiveTranslationLingering(false);
+  }, []);
+
   // Global Esc dismisses a lingering translation card. Kept in its own effect so
   // the replay effect's listener count (asserted by capsule-ready-replay) is stable.
   useEffect(() => {
@@ -876,10 +904,7 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
     (async () => {
       const { listen } = await import('@tauri-apps/api/event');
       const handle = await listen('capsule:translation-dismiss', () => {
-        liveTranslationRef.current = clearLiveTranslation(liveTranslationRef.current);
-        setLiveTranslationText('');
-        setLiveTranslationLingering(false);
-        void setCapsuleTranslationLingering(false).catch(() => {});
+        dismissLingeringTranslation();
       });
       if (cancelled) handle();
       else unlisten = handle;
@@ -888,7 +913,7 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
       cancelled = true;
       unlisten?.();
     };
-  }, []);
+  }, [dismissLingeringTranslation]);
 
   // Fallback card comes first: it pops the moment the session ends, while the capsule
   // is still rendering the Done/Error terminal state — and the session's outcome was
@@ -909,7 +934,7 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
   // Lingering translation card: the session already ended (window would idle-hide)
   // but the user is still reading. Render the card alone; Esc or the next session
   // dismisses it (native keeps the window open via translation_lingering).
-  if (lingeringCardActive && state === 'idle' && !leaving) {
+  if (lingeringCardActive && !leaving) {
     return (
       <div
         style={{
@@ -919,7 +944,7 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
           flexDirection: 'column',
           alignItems: 'center',
           justifyContent: 'flex-end',
-          paddingBottom: 16,
+          paddingBottom: 4,
           boxSizing: 'border-box',
           background: 'transparent',
         }}
@@ -930,6 +955,10 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
           maxWidth={CAPSULE_TRANSLATION_CARD_MAX_WIDTH}
           maxHeight={translationTextHeight}
           tag={t('capsule.liveTranslationTag')}
+          interactive
+          onClose={dismissLingeringTranslation}
+          onDragStart={() => void beginCapsuleTranslationDrag()}
+          onDragMove={(dx, dy) => void dragCapsuleTranslation(dx, dy)}
         />
       </div>
     );

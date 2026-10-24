@@ -134,6 +134,12 @@ export interface LiveTranslationCardProps {
   maxWidth: number;
   tone?: 'frost' | 'dark';
   tag?: string;
+  /** Lingering mode: adds a drag strip + close button and makes the text selectable. */
+  interactive?: boolean;
+  onClose?: () => void;
+  onDragStart?: () => void;
+  onDragMove?: (dx: number, dy: number) => void;
+  onDragEnd?: () => void;
 }
 
 /** One whitespace-padded word of the translation snapshot, keyed by source offset. */
@@ -227,7 +233,13 @@ export function LiveTranslationCard({
   maxWidth,
   tone = 'frost',
   tag,
+  interactive = false,
+  onClose,
+  onDragStart,
+  onDragMove,
+  onDragEnd,
 }: LiveTranslationCardProps) {
+  const dragOrigin = useRef<{ x: number; y: number } | null>(null);
   const reduceMotion = useReducedMotion();
   const liveText = text.trim();
   const [units, setUnits] = useState<TranslationWordUnit[]>(() => diffTranslationWords([], ''));
@@ -252,8 +264,39 @@ export function LiveTranslationCard({
       className="ol-capsule-transcript-rail ol-capsule-transcript-rail--translation"
       data-transcript-rail="true"
     >
-      <div className="ol-live-translation-card" data-tone={tone} style={{ maxWidth, fontSize }}>
-        {tag && <span className="ol-live-transcript-tag">{tag}</span>}
+      <div
+        className="ol-live-translation-card"
+        data-tone={tone}
+        data-interactive={interactive ? 'true' : 'false'}
+        style={{ maxWidth, fontSize }}
+      >
+        {interactive && (
+          <div
+            className="ol-live-translation-grip"
+            onPointerDown={(event) => {
+              dragOrigin.current = { x: event.screenX, y: event.screenY };
+              (event.target as HTMLElement).setPointerCapture?.(event.pointerId);
+              onDragStart?.();
+            }}
+            onPointerMove={(event) => {
+              if (!dragOrigin.current) return;
+              onDragMove?.(
+                event.screenX - dragOrigin.current.x,
+                event.screenY - dragOrigin.current.y,
+              );
+            }}
+            onPointerUp={() => {
+              dragOrigin.current = null;
+              onDragEnd?.();
+            }}
+          >
+            {tag && <span className="ol-live-transcript-tag">{tag}</span>}
+            <button type="button" className="ol-live-translation-close" onClick={onClose}>
+              <Icon name="close" size={11} strokeWidth={2.2} />
+            </button>
+          </div>
+        )}
+        {!interactive && tag && <span className="ol-live-transcript-tag">{tag}</span>}
         <div
           className="ol-live-translation-frame"
           ref={frameRef}

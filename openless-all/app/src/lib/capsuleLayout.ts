@@ -107,6 +107,8 @@ export function getCapsuleTranscriptRailHeight(style: CapsuleStyle): number {
 export const CAPSULE_TRANSLATION_MAX_LINES = 4;
 /** Card vertical padding + border, on top of the wrapped text block. */
 export const CAPSULE_TRANSLATION_CARD_CHROME = 18;
+/** Interactive (lingering) card's drag/close strip height. */
+export const CAPSULE_TRANSLATION_GRIP_HEIGHT = 26;
 /**
  * Card max width in CSS px. Wider than the 460px capsule body so a wrapped
  * English sentence needs fewer lines; the native window grows to match
@@ -144,6 +146,18 @@ export function getCapsuleTranslationRailHeight(style: CapsuleStyle, fontSize: n
  * visible, in native logical px. The capsule window centers the wider card;
  * Typeless scales its whole tree by 0.447.
  */
+/**
+ * Vertical distance from the capsule window's docked bottom to the translation
+ * card's bottom edge while a session is active. The lingering card window is
+ * raised by exactly this amount so the card does not move when the session
+ * body (orb / pill) disappears.
+ */
+export function getCapsuleLingeringBottomOffset(os: OS, style: CapsuleStyle): number {
+  const host = getCapsuleHostMetrics(os, false, style);
+  const bodyHeight = style === 'classic' ? getCapsulePillMetrics(os).height : host.height;
+  return host.bottomInset + bodyHeight + CAPSULE_TRANSCRIPT_RAIL_GAP;
+}
+
 export function getCapsuleTranslationWindowWidth(
   style: CapsuleStyle,
   cardMaxWidth: number = CAPSULE_TRANSLATION_CARD_MAX_WIDTH,

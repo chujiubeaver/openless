@@ -36,9 +36,30 @@ export function setCapsuleTranscriptVisible(
  * Keep the capsule window open after the session ends so the wrapped
  * translation card stays readable until Esc or the next session.
  */
-export function setCapsuleTranslationLingering(active: boolean): Promise<void> {
+export function setCapsuleTranslationLingering(
+  active: boolean,
+  cardWidth = 0,
+  cardHeight = 0,
+  bottomOffset = 0,
+): Promise<void> {
   if (!isDesktop()) return Promise.resolve();
-  return invokeOrMock('set_capsule_translation_lingering', { active }, () => undefined);
+  return invokeOrMock(
+    'set_capsule_translation_lingering',
+    { active, cardWidth, cardHeight, bottomOffset },
+    () => undefined,
+  );
+}
+
+/** Begin a user drag of the lingering translation card (free placement). */
+export function beginCapsuleTranslationDrag(): Promise<void> {
+  if (!isDesktop()) return Promise.resolve();
+  return invokeOrMock('begin_capsule_translation_drag', undefined, () => undefined);
+}
+
+/** Move the lingering translation card window by a screen-space delta from drag start. */
+export function dragCapsuleTranslation(dx: number, dy: number): Promise<void> {
+  if (!isDesktop()) return Promise.resolve();
+  return invokeOrMock('drag_capsule_translation', { dx, dy }, () => undefined);
 }
 
 /** Latest native capsule frame, used by the separate Windows rail after its webview is ready. */
