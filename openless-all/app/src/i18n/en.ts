@@ -1528,7 +1528,7 @@ export const en: typeof zhCN = {
       capsuleTranscriptFontSize: 'Transcript font size',
       liveTranslationPreviewLabel: 'Live English translation preview',
       liveTranslationPreviewDesc:
-        'Show a live English translation of what you say in the capsule while recording. Display only: never inserted, never saved to history, cleared when recording ends. Audio is additionally streamed to the translation model (qwen3.8-livetranslate-flash-realtime) on your current Bailian channel using the same API key; billed by audio duration.',
+        'Show a live English translation of what you say in the capsule while recording. Display only: never inserted, never saved to history; after recording ends the card stays readable until you press Fn+Esc or Ctrl+Esc, click the close button, or start a new recording. Audio is additionally streamed to the translation model (qwen3.8-livetranslate-flash-realtime) on your current Bailian channel using the same API key; billed by audio duration.',
       liveTranslationPreviewUnavailableOmni:
         'Requires Multimodal mode with a Bailian (dashscope-omni) channel.',
       liveTranslationPreviewUnavailableStreaming:

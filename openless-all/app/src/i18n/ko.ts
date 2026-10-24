@@ -1503,7 +1503,7 @@ export const ko: typeof zhCN = {
       capsuleTranscriptFontSize: '원문 글자 크기',
       liveTranslationPreviewLabel: '실시간 영어 번역 미리보기',
       liveTranslationPreviewDesc:
-        '녹음 중 캡슐에 말한 내용의 영어 번역을 실시간으로 표시합니다. 보기 전용이며 문서에 삽입되거나 기록에 저장되지 않고 녹음이 끝나면 사라집니다. 오디오는 현재 Bailian 채널의 번역 모델(qwen3.8-livetranslate-flash-realtime)로 추가로 실시간 전송되며 동일한 API 키를 사용하고 오디오 길이로 과금됩니다.',
+        '녹음 중 캡슐에 말한 내용의 영어 번역을 실시간으로 표시합니다. 보기 전용이며 문서에 삽입되거나 기록에 저장되지 않으며, 녹음이 끝난後も 카드는 읽을 수 있게 유지됩니다. Fn+Esc / Ctrl+Esc, 오른쪽 위 닫기 버튼, 새 녹음 시작 시 사라집니다. 오디오는 현재 Bailian 채널의 번역 모델(qwen3.8-livetranslate-flash-realtime)로 추가로 실시간 전송되며 동일한 API 키를 사용하고 오디오 길이로 과금됩니다.',
       liveTranslationPreviewUnavailableOmni:
         '멀티모달 모드이면서 채널이 Bailian(dashscope-omni)이어야 합니다.',
       liveTranslationPreviewUnavailableStreaming:

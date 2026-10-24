@@ -1549,7 +1549,7 @@ export const es: typeof zhCN = {
       capsuleTranscriptFontSize: 'Tamaño de la transcripción',
       liveTranslationPreviewLabel: 'Vista previa de traducción al inglés en directo',
       liveTranslationPreviewDesc:
-        'Muestra en la cápsula una traducción al inglés en directo de lo que dices mientras grabas. Solo visualización: nunca se inserta, nunca se guarda en el historial y se borra al terminar la grabación. El audio se transmite además al modelo de traducción (qwen3.8-livetranslate-flash-realtime) de tu canal Bailian actual con la misma clave API; se factura por duración de audio.',
+        'Muestra en la cápsula una traducción al inglés en directo de lo que dices mientras grabas. Solo visualización: nunca se inserta ni se guarda en el historial; al terminar la grabación la tarjeta sigue visible hasta pulsar Fn+Esc o Ctrl+Esc, cerrar con el botón o iniciar una nueva grabación. El audio se transmite además al modelo de traducción (qwen3.8-livetranslate-flash-realtime) de tu canal Bailian actual con la misma clave API; se factura por duración de audio.',
       liveTranslationPreviewUnavailableOmni:
         'Requiere el modo multimodal con un canal Bailian (dashscope-omni).',
       liveTranslationPreviewUnavailableStreaming:

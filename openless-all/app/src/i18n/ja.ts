@@ -1516,7 +1516,7 @@ export const ja: typeof zhCN = {
       capsuleTranscriptFontSize: '文字起こしの文字サイズ',
       liveTranslationPreviewLabel: 'リアルタイム英語翻訳プレビュー',
       liveTranslationPreviewDesc:
-        '録音中に、話した内容の英語翻訳をカプセルにリアルタイム表示します。表示専用で、文書への挿入や履歴への保存は行わず、録音終了時に消去されます。音声は現在の Bailian チャネルの翻訳モデル（qwen3.8-livetranslate-flash-realtime）にもリアルタイム送信され、同じ API キーを使い、音声の長さで課金されます。',
+        '録音中に、話した内容の英語翻訳をカプセルにリアルタイム表示します。表示専用で、文書への挿入や履歴への保存は行わず、録音終了後もカードは読めるまま保持されます。Fn+Esc / Ctrl+Esc、右上の閉じるボタン、または新しい録音の開始で消去されます。音声は現在の Bailian チャネルの翻訳モデル（qwen3.8-livetranslate-flash-realtime）にもリアルタイム送信され、同じ API キーを使い、音声の長さで課金されます。',
       liveTranslationPreviewUnavailableOmni:
         '「マルチモーダルモード」で、チャネルが Bailian（dashscope-omni）の場合に利用できます。',
       liveTranslationPreviewUnavailableStreaming:

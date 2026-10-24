@@ -305,6 +305,19 @@ pub(crate) fn next_press_id() -> u64 {
 /// events. Updated by the coordinator's emit_capsule on capsule state changes.
 static ESC_EXCLUSIVE: AtomicBool = AtomicBool::new(false);
 
+/// A lingering translation card is on screen. While set, plain Esc must NOT
+/// dismiss it (it passes through to host apps); only Fn+Esc / Ctrl+Esc dismiss
+/// it, and those combos are swallowed so no app sees a stray Esc.
+static TRANSLATION_LINGERING: AtomicBool = AtomicBool::new(false);
+
+pub fn set_translation_lingering_hotkey(active: bool) {
+    TRANSLATION_LINGERING.store(active, std::sync::atomic::Ordering::SeqCst);
+}
+
+fn translation_lingering_hotkey() -> bool {
+    TRANSLATION_LINGERING.load(std::sync::atomic::Ordering::SeqCst)
+}
+
 pub fn set_esc_exclusive(active: bool) {
     ESC_EXCLUSIVE.store(active, std::sync::atomic::Ordering::SeqCst);
 }
@@ -471,6 +484,7 @@ mod platform {
 
     use super::{
         esc_exclusive, install_error, reset_shared_held_state, send_cancel_or_log,
+        translation_lingering_hotkey,
         send_combo_abort_or_log, send_or_log, start_listener_thread, update_shared_binding,
         update_shared_modifier_shortcuts, HotkeyAdapter, HotkeyCombinedEdge, HotkeyEvent, Shared,
         StartupTx,
@@ -776,6 +790,19 @@ mod platform {
             KEY_DOWN => {
                 let keycode = unsafe { CGEventGetIntegerValueField(event, KEYBOARD_EVENT_KEYCODE) };
                 if keycode == ESC_KEYCODE && super::capsule_menu_open() { return event; }
+                // Lingering translation card: Fn+Esc / Ctrl+Esc dismiss it and are
+                // consumed here (no app sees the Esc); a bare Esc is left alone so it
+                // keeps its normal meaning for the focused application.
+                if keycode == ESC_KEYCODE && translation_lingering_hotkey() {
+                    let flags = unsafe { CGEventGetFlags(event) };
+                    let combo = (flags & FLAG_MASK_CONTROL) != 0
+                        || (flags & FLAG_MASK_SECONDARY_FN) != 0;
+                    if combo {
+                        send_cancel_or_log(&ctx.cancel_tx);
+                        return std::ptr::null_mut();
+                    }
+                    return event;
+                }
                 if !ctx.shared.recording_active.load(Ordering::SeqCst)
                     && crate::side_aware_combo::platform::dispatch_keycode(keycode, false, 0, true) {
                     crate::side_aware_combo::handle_companion_key_down();

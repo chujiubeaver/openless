@@ -1558,7 +1558,7 @@ export const de: typeof zhCN = {
       capsuleTranscriptFontSize: 'Transkript-Schriftgröße',
       liveTranslationPreviewLabel: 'Live-Übersetzungsvorschau (Englisch)',
       liveTranslationPreviewDesc:
-        'Zeigt während der Aufnahme eine Live-Übersetzung des Gesprochenen auf Englisch in der Kapsel. Nur zur Anzeige: wird nie eingefügt, nie im Verlauf gespeichert und beim Aufnahmeende gelöscht. Das Audio wird zusätzlich zum Übersetzungsmodell (qwen3.8-livetranslate-flash-realtime) Ihres aktuellen Bailian-Kanals gestreamt, mit demselben API-Schlüssel; Abrechnung nach Audiodauer.',
+        'Zeigt während der Aufnahme eine Live-Übersetzung des Gesprochenen auf Englisch in der Kapsel. Nur zur Anzeige: wird nie eingefügt und nie im Verlauf gespeichert; nach Aufnahmeende bleibt die Karte lesbar, bis Sie Fn+Esc oder Ctrl+Esc drücken, auf Schließen klicken oder eine neue Aufnahme starten. Das Audio wird zusätzlich zum Übersetzungsmodell (qwen3.8-livetranslate-flash-realtime) Ihres aktuellen Bailian-Kanals gestreamt, mit demselben API-Schlüssel; Abrechnung nach Audiodauer.',
       liveTranslationPreviewUnavailableOmni:
         'Erfordert den Multimodal-Modus mit einem Bailian-Kanal (dashscope-omni).',
       liveTranslationPreviewUnavailableStreaming:

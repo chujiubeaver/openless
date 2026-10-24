@@ -1456,7 +1456,7 @@ export const zhTW: typeof zhCN = {
       capsuleTranscriptFontSize: '原文字級',
       liveTranslationPreviewLabel: '即時英文翻譯預覽',
       liveTranslationPreviewDesc:
-        '錄音期間在膠囊中即時顯示所說內容的英文翻譯，僅供查看，不插入文件、不進歷史，錄音結束即清除。音訊會額外即時傳送到目前百煉渠道的翻譯模型（qwen3.8-livetranslate-flash-realtime），使用同一 API Key，依音訊時長計費。',
+        '錄音期間在膠囊中即時顯示所說內容的英文翻譯，僅供查看，不插入文件、不進歷史；錄音結束後卡片保留可讀，按 Fn+Esc 或 Ctrl+Esc、點右上角關閉、或開始新錄音時清除。音訊會額外即時傳送到目前百煉渠道的翻譯模型（qwen3.8-livetranslate-flash-realtime），使用同一 API Key，依音訊時長計費。',
       liveTranslationPreviewUnavailableOmni: '需要「多模態模式」且渠道為百煉（dashscope-omni）。',
       liveTranslationPreviewUnavailableStreaming: '目前辨識已提供即時原文，此功能不生效。',
       capsuleDisplayModeLabel: '多螢幕膠囊',

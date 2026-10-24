@@ -1569,7 +1569,7 @@ export const fr: typeof zhCN = {
       capsuleTranscriptFontSize: 'Taille de la transcription',
       liveTranslationPreviewLabel: 'Aperçu de traduction anglaise en direct',
       liveTranslationPreviewDesc:
-        'Affiche dans la capsule une traduction anglaise en direct de ce que vous dites pendant l’enregistrement. Affichage uniquement : jamais insérée, jamais enregistrée dans l’historique, effacée à la fin de l’enregistrement. L’audio est en plus diffusé vers le modèle de traduction (qwen3.8-livetranslate-flash-realtime) de votre canal Bailian actuel, avec la même clé API ; facturé à la durée audio.',
+        'Affiche dans la capsule une traduction anglaise en direct de ce que vous dites pendant l’enregistrement. Affichage uniquement : jamais insérée, jamais enregistrée dans l’historique ; après la fin de l’enregistrement, la carte reste lisible jusqu’à Fn+Esc / Ctrl+Esc, au bouton de fermeture ou au démarrage d’un nouvel enregistrement. L’audio est en plus diffusé vers le modèle de traduction (qwen3.8-livetranslate-flash-realtime) de votre canal Bailian actuel, avec la même clé API ; facturé à la durée audio.',
       liveTranslationPreviewUnavailableOmni:
         'Nécessite le mode multimodal avec un canal Bailian (dashscope-omni).',
       liveTranslationPreviewUnavailableStreaming:

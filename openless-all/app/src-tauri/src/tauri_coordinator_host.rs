@@ -1650,6 +1650,7 @@ impl TauriCapsuleWindow {
         bottom_offset: f64,
     ) -> tauri::Result<()> {
         let was = self.state.translation_lingering.swap(active, Ordering::SeqCst);
+        crate::hotkey::set_translation_lingering_hotkey(active);
         if active {
             *self.state.lingering_card_size.lock() = (card_width, card_height);
             *self.state.lingering_bottom_offset.lock() = bottom_offset;
