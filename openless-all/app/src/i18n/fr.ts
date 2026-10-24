@@ -1,9 +1,11 @@
+import { siwcFr as siwc } from './siwc';
 import type { zhCN } from './zh-CN';
 
 import { uiRefinementEn as uiRefinement } from './uiRefinement';
 import { experimentalAsrEn as experimentalAsr } from './experimentalAsr';
 
 export const fr: typeof zhCN = {
+  siwc,
   experimentalAsr,
   uiRefinement,
   voiceEdit: {
@@ -322,6 +324,8 @@ export const fr: typeof zhCN = {
     cancelled: 'Annulé',
     error: 'Une erreur s’est produite',
     inserted: '{{count}} insérés',
+    translateTo: 'Traduire en',
+    translationChangeFailed: 'Impossible de changer de langue. Veuillez réessayer.',
     translating: 'Traduction',
     liveTranslationTag: 'EN',
     selectionPolish: {
@@ -353,6 +357,12 @@ export const fr: typeof zhCN = {
     cancel: 'Annuler',
   },
   qa: {
+    activity: {
+      searchingWeb: 'Recherche sur le Web',
+      readingWeb: 'Lecture des pages Web',
+      usingTool: 'Utilisation de {{tool}}',
+      tool: 'outil',
+    },
     compact: {
       closeError: 'Impossible de fermer. Réessayez.',
       sendError: 'Échec de l’envoi. Votre saisie est conservée. Réessayez.',
@@ -1235,8 +1245,22 @@ export const fr: typeof zhCN = {
       fallbackDesc: 'Si la traduction échoue, la transcription brute est insérée à la place.',
     },
   },
+  askAnything: {
+    dictation: 'Dicter',
+    translation: 'Traduire',
+    question: 'Poser une question',
+    dictationHint: 'Parlez pour saisir du texte',
+    translationHint: 'Choisissez la langue pendant la capture',
+    questionHint: 'Sélectionnez du texte ou posez une question',
+    description:
+      'Appuyez sur la combinaison pour parler, puis à nouveau pour envoyer. La réponse apparaît en bas de l’écran.',
+    auxiliaryKey: 'Touche complémentaire',
+    auxiliaryHint: 'Appuyez avec {{key}}. Tout changement de touche d’enregistrement est suivi.',
+    selectionHint:
+      'Le texte sélectionné sert de contexte. La sélection est facultative. Chaque combinaison commence une nouvelle question.',
+  },
   selectionAsk: {
-    title: 'Questions sur la sélection',
+    title: 'Poser une question',
     desc: 'Sélectionnez du texte et posez des questions à voix haute, puis poursuivez la conversation.',
     shortcutSettings: 'Réglages des raccourcis',
     guide: {
@@ -1371,6 +1395,16 @@ export const fr: typeof zhCN = {
       cursorContextLabel: 'Contexte du curseur (expérimental)',
       cursorContextDesc:
         'Envoyer un court extrait du texte autour du curseur au modèle comme référence pour les noms propres, les homophones et les pronoms lors de la reformulation (macOS / Windows / Android). La dictée, les notes rapides et les notes cloud l’utilisent, mais le contexte lui-même n’est jamais écrit dans les notes, l’historique ou les journaux ; avec un modèle cloud, il est envoyé à ce fournisseur avec la demande de reformulation. Ce réglage est indépendant de l’apprentissage local. Les champs de mot de passe, les terminaux et les applications sensibles connues sont exclus.',
+    },
+    localMigration: {
+      title: 'Migration de la configuration locale',
+      description:
+        'Exportez toute la configuration locale portable dans un paquet versionné ou restaurez-la sur un autre appareil Android. Le mode partage est anonymisé par défaut ; une migration personnelle ne peut inclure des identifiants qu’avec une protection par mot de passe. Le flux natif affiche la source, la version, les catégories et les changements avant fusion ou remplacement.',
+      safetyNote:
+        'Les autorisations système, sessions OAuth, chemins de l’appareil et états d’exécution ne sont jamais migrés. Une sauvegarde locale est créée avant l’importation.',
+      open: 'Ouvrir la migration locale',
+      opening: 'Ouverture…',
+      openFailed: 'Impossible d’ouvrir la migration locale. Réessayez depuis les réglages.',
     },
     codingConsole: {
       title: 'Console Claude',
@@ -1529,7 +1563,6 @@ export const fr: typeof zhCN = {
       microphoneMonitorError: 'Impossible de surveiller le niveau d’entrée : {{message}}',
       capsuleLabel: 'Capsule d’enregistrement',
       capsuleDesc: 'Affiche une capsule en bas de l’écran pendant l’enregistrement.',
-      capsuleStyleTypeless: 'Style compact Typeless',
       capsuleTranscriptLabel: 'Afficher la transcription en direct',
       capsuleTranscriptDesc:
         'Affiche le texte reconnu à la place des barres audio. Sans streaming, le texte apparaît à réception du résultat. Désactivez pour retrouver l’affichage initial.',
@@ -1541,6 +1574,16 @@ export const fr: typeof zhCN = {
         'Nécessite le mode multimodal avec un canal Bailian (dashscope-omni).',
       liveTranslationPreviewUnavailableStreaming:
         'Votre reconnaissance actuelle affiche déjà le texte en direct ; cet aperçu est inactif.',
+      capsuleDisplayModeLabel: 'Capsule sur plusieurs écrans',
+      capsuleDisplayModeDesc:
+        'Choisissez où afficher la capsule. Le mode tous les écrans utilise davantage de fenêtres et de ressources graphiques.',
+      capsuleDisplayCursorScreen: 'Écran sous le pointeur',
+      capsuleDisplayPrimaryScreen: 'Écran principal uniquement',
+      capsuleDisplayForegroundWindowScreen: 'Écran de la fenêtre au premier plan',
+      capsuleDisplayAllScreens: 'Afficher sur tous les écrans',
+      capsuleDisplayModeRestartTitle: 'Redémarrer OpenLess pour appliquer le mode d’affichage',
+      capsuleDisplayModeRestartDesc:
+        'Quitter le mode tous les écrans nécessite un redémarrage pour fermer les anciennes capsules. Redémarrer maintenant ?',
       capsuleStyleLabel: 'Style de capsule',
       capsuleStyleSiri: 'Style lumineux Siri',
       capsuleStyleClassic: 'Style par défaut d’OpenLess',
@@ -1550,9 +1593,37 @@ export const fr: typeof zhCN = {
       lowLatencyDictationLabel: 'Capture à faible latence',
       lowLatencyDictationDesc:
         'Garde un flux microphone prêt et conserve jusqu’à 500 ms en mémoire afin de réduire les mots perdus juste après le raccourci. Aucun audio n’est enregistré ni envoyé avant confirmation ; ce mode consomme davantage et maintient l’indicateur du microphone actif.',
-      audioEnhancementLabel: 'Amélioration légère du microphone',
+      dsp: {
+        noise: 'Noise reduction',
+        dereverb: 'Comb filter',
+        equalizer: 'Equalizer',
+        gain: 'Input gain',
+        agc: 'Automatic gain',
+        vad: 'Speech gate',
+        title: 'Speech enhancement settings',
+        description:
+          'RNNoise is lightweight; PureVox offers model-based noise reduction with higher CPU use. Changes apply to the next recording.',
+        off: 'Off',
+        spectral: 'Spectral subtraction',
+        strength: 'Noise reduction strength',
+        target: 'Target level',
+        attack: 'Attack speed',
+        decay: 'Release speed',
+        vadHint:
+          'Attenuates quiet passages; it does not stop recording. A high threshold can remove quiet speech.',
+        threshold: 'Speech gate threshold',
+        tone: 'Tone and room adjustments',
+        combHint:
+          'The comb filter follows MicYou’s simple delay subtraction. It can color speech; start at 0%.',
+        preamp: 'Equalizer preamp',
+        order: 'Processing order',
+        up: 'Move up',
+        down: 'Move down',
+        reset: 'Reset enhancement settings',
+      },
+      audioEnhancementLabel: 'Amélioration de la voix',
       audioEnhancementDesc:
-        'Applique un gain léger, une limitation douce et une réduction prudente du bruit au microphone local. N’inclut pas l’annulation d’écho. Désactivée par défaut.',
+        'Réduction du bruit RNNoise ou PureVox, gain automatique et limitation. Désactivée par défaut ; les changements prennent effet au prochain enregistrement.',
       muteDuringRecordingLabel: 'Couper le son pendant l’enregistrement',
       muteDuringRecordingDesc:
         'Coupe temporairement le son système pendant la saisie vocale pour éviter l’écho des haut-parleurs.',
@@ -1570,6 +1641,9 @@ export const fr: typeof zhCN = {
       pasteShortcutCtrlV: 'Ctrl+V (par défaut / plupart des applications)',
       pasteShortcutCtrlShiftV: 'Ctrl+Shift+V (kitty / alacritty / wezterm / plupart des terminaux)',
       pasteShortcutShiftInsert: 'Shift+Insert (xterm / urxvt)',
+      plainTextInsertionLabel: 'Mode d’insertion en texte brut',
+      plainTextInsertionDesc:
+        'Lorsqu’il est activé, le collage simulé utilise Maj+Insert au lieu de Ctrl+V (le raccourci ci-dessus est verrouillé pendant ce temps). À n’activer que dans des cas très particuliers, par ex. si un outil de changement de disposition comme Punto Switcher intercepte Ctrl+V. S’applique uniquement à l’insertion par collage via le presse-papiers (Windows uniquement).',
       comboRecordLabel: 'Enregistrer un raccourci',
       comboRecordDesc:
         'Cliquez, puis appuyez sur la combinaison souhaitée (p. ex. ⌘⇧D). Accepte les modes Basculer et Maintenir pour parler.',
@@ -1633,7 +1707,31 @@ export const fr: typeof zhCN = {
       audioRecordingMaxEntriesLabel: 'Nombre maximal d’enregistrements bruts',
       audioRecordingMaxEntriesDesc:
         'Nombre maximal de fichiers WAV conservés localement. Vide = 200.',
+      voiceActivationLabel: 'Activation vocale',
+      voiceActivationDesc: 'Écouter localement une phrase d’activation pour démarrer la dictée.',
+      voiceActivationLocalOnly:
+        'La reconnaissance reste sur cet appareil ; l’audio en veille n’est ni envoyé ni archivé.',
+      voiceActivationMultimodalModels:
+        'Préparez ici le modèle d’activation vocale. La dictée utilise toujours votre service multimodal actuel.',
+      voiceActivationModelMissing: 'Le modèle local Zipformer n’est pas installé.',
+      voiceActivationDownloadZipformer: 'Télécharger Zipformer',
+      voiceActivationWakeEnabled: 'Phrase d’activation',
+      voiceActivationWakePhrase: 'Phrase d’activation',
+      voiceActivationFinishEnabled: 'Phrase de fin',
+      voiceActivationFinishPhrase: 'Phrase de fin',
+      voiceActivationTimeoutEnabled: 'Arrêter après expiration',
+      voiceActivationTimeoutSeconds: 'Délai (secondes)',
       startupGroupTitle: 'Démarrage',
+      lowMemoryBackgroundLabel: 'Mode arrière-plan économe en mémoire',
+      lowMemoryBackgroundDesc:
+        'Après redémarrage : libère la fenêtre principale à sa fermeture et affiche la capsule native à la demande. Désactive le préchauffage du microphone au repos. Conserve les réglages de libération des modèles locaux.',
+      lowMemoryRestartLabel: 'Appliqué après redémarrage',
+      lowMemoryRestartDesc:
+        "Le commutateur du mode arrière à faible mémoire est enregistré ; le mode actif ne change qu'après le redémarrage de l'application.",
+      lowMemoryRestartNow: 'Redémarrer maintenant',
+      lowMemoryCapsuleErrorLabel: 'Capsule native indisponible',
+      lowMemoryCapsuleErrorDesc:
+        "La dictée fonctionne toujours, mais la capsule flottante ne s'affichera pas. Le programme auxiliaire est peut-être manquant ou bloqué ; réinstallez l'application.",
       startMinimizedLabel: 'Démarrer réduit (sans fenêtre principale)',
       startMinimizedDesc:
         'Au lancement, seule la barre des menus ou la zone de notification est affichée, jamais la fenêtre principale.',
@@ -1762,6 +1860,7 @@ export const fr: typeof zhCN = {
         openai: 'OpenAI',
         gemini: 'Google Gemini',
         codexOAuth: 'Codex OAuth',
+        chatgptSiwc: 'ChatGPT Plan',
         mimo: 'Xiaomi MiMo',
         cometapi: 'CometAPI',
         openrouterFree: 'OpenRouter (modèles gratuits)',
@@ -1806,9 +1905,9 @@ export const fr: typeof zhCN = {
         omniDashscope: 'Alibaba DashScope Omni',
       },
       geminiTranscribeNotice:
-        'gemini-3.5-transcribe effectue ici une transcription mot à mot, suivie du LLM configuré. Pour la transcription intelligente, sélectionnez ce modèle en mode multimodal. L’audio est envoyé à la fin de l’enregistrement ; le direct n’est pas pris en charge. URL de base : https://generativelanguage.googleapis.com/v1beta (ou /v1beta/interactions).',
+        'Les deux modèles transcrivent ici mot à mot, avec traitement facultatif par le LLM configuré. gemini-3.5-transcribe envoie l’audio à la fin de l’enregistrement. gemini-3.5-transcribe-live affiche les résultats pendant que vous parlez, jusqu’à 10 minutes par enregistrement. Pour la transcription intelligente, utilisez le mode multimodal. URL de base : https://generativelanguage.googleapis.com/v1beta.',
       geminiTranscribeOmniNotice:
-        'gemini-3.5-transcribe permet la transcription intelligente : suppression des hésitations, application des corrections orales et mise en forme après l’enregistrement. Les langues de travail et le dictionnaire sont pris en charge. Ce modèle n’utilise pas les consignes de style et ne permet pas la traduction, la révision de texte ou les questions-réponses ; utilisez le mode traditionnel avec un LLM pour ces tâches.',
+        'gemini-3.5-transcribe et gemini-3.5-transcribe-live permettent la transcription intelligente. Live affiche un brouillon pendant que vous parlez, jusqu’à 10 minutes par enregistrement. À la fin, la transcription intelligente supprime les hésitations, applique les corrections orales et met en forme le texte final. Les deux modèles prennent en charge les langues de travail et le dictionnaire, mais pas les consignes de style, la traduction, la révision de texte ni les questions-réponses ; utilisez le mode traditionnel avec un LLM pour ces tâches.',
       validateSuccessAudio:
         'Connexion audio vérifiée avec un court échantillon de silence. Confirmez la qualité de transcription avec un court enregistrement.',
       elevenLabsUploadNotice:
@@ -1841,8 +1940,9 @@ export const fr: typeof zhCN = {
       volcengineAuthModeApiKey: 'Clé API (nouvelle console)',
       volcengineMappingNote:
         'Secret Key n’est pas nécessaire actuellement. Le Resource ID par défaut est volc.seedasr.sauc.duration.',
-      volcengineApiKeyNote:
-        'Utilisez une clé API créée dans la nouvelle console vocale, sans APP ID. Créez-la dans la gestion des clés API : console.volcengine.com/speech/new/setting/apikeys. Le Resource ID par défaut est volc.seedasr.sauc.duration.',
+      volcengineApiKeyConsole: 'Doubao Speech · Clés API',
+      volcengineApiKeyNote: 'Créez ici une clé API vocale ; les clés Ark ne sont pas compatibles.',
+      volcengineResourceIdNote: 'Le Resource ID par défaut est {{resourceId}}.',
       xfyunAppIdLabel: 'AppID',
       xfyunApiKeyLabel: 'Clé API',
       xfyunNote:
@@ -2171,12 +2271,14 @@ export const fr: typeof zhCN = {
         background: 'Lorsque l’application est en arrière-plan',
         keyboard: 'À l’apparition du clavier',
         always: 'Toujours visible',
+        never: 'Ne jamais afficher',
       },
       androidOverlayTriggerHint: {
         background:
           'Simple et économe en batterie ; aucune fenêtre flottante pendant la saisie dans d’autres applications.',
         keyboard: 'Ce mode a été retiré. Les réglages existants repassent en mode arrière-plan.',
         always: 'Toujours disponible, mais reste affichée en permanence.',
+        never: 'N’apparaît jamais automatiquement ; le clavier reste utilisable.',
       },
       androidOverlayTriggerDisabled: {
         keyboard:
@@ -2260,6 +2362,9 @@ export const fr: typeof zhCN = {
         'SendInput Unicode écrit directement, sans passer par TSF / IME et sans changer de méthode de saisie.',
       streamingInsertHintLinux:
         'Utilise le complément fcitx5 pour envoyer le texte ; l’insertion progressive simule les touches avec enigo + XTest.',
+      windowsCompositionInputLabel: 'Afficher la transcription en direct dans le champ (Windows)',
+      windowsCompositionInputDesc:
+        "Pendant la dictée, le texte reconnu apparaît souligné dans le champ puis est remplacé par le résultat final. Nécessite le composant de saisie TSF d'OpenLess et une application compatible avec TSF.",
       streamingInsertSaveClipboardLabel: 'Copier dans le presse-papiers',
       streamingInsertSaveClipboardHint:
         'Après une insertion réussie, copie le texte final dans le presse-papiers pour pouvoir le recoller avec Cmd+V. Désactivé : le presse-papiers n’est jamais modifié.',
@@ -2268,6 +2373,9 @@ export const fr: typeof zhCN = {
         'Remplace l’ASR dans le cloud par l’inférence sur l’appareil. Pour l’usage hors ligne ou les données sensibles.',
       localAsrWarningShort:
         'L’inférence locale est plus lente ; un appareil insuffisamment puissant peut omettre des mots.',
+      localAsrFallbackLabel: 'Utiliser le modèle local si le cloud échoue',
+      localAsrFallbackDesc:
+        "En cas de connexion faible ou absente, transcrit l'enregistrement avec le modèle local téléchargé au lieu d'attendre les nouvelles tentatives du cloud. Nécessite un modèle local téléchargé.",
       qwen3Desc: 'Une fois activé, il remplace le fournisseur ASR.',
       sherpaDesc: 'Une fois activé, il remplace le fournisseur ASR.',
       foundryDesc: 'Une fois activé, il remplace le fournisseur ASR.',

@@ -111,6 +111,8 @@
 
 OpenLess 是一款跨平台(macOS 与 Windows)语音输入应用,是 [Typeless](https://www.typeless.com/)、[Wispr Flow](https://wisprflow.ai)、[Lazy](https://heylazy.com)、Superwhisper 等商业工具的完全开源替代品。官网:[openless.top](https://openless.top)。
 
+原生 [iOS 应用与输入法](openless-all/ios/README.md) 位于 `openless-all/ios/`，支持中英文打字、语音优先与长按空格输入两种模式，以及语音翻译。源码构建和个人签名方式见 iOS 工程说明。
+
 把光标放在任意文本框中——ChatGPT、Claude、Cursor、Notion、邮件草稿、聊天框——按下一个全局快捷键,然后开口说话。OpenLess 会录音、转写,按你选定的模式润色文本,并将结果插入到光标处。如果插入被阻止,文本会改为复制到剪贴板,你说过的话不会丢失。
 
 与只产出逐字转写稿的听写工具不同,OpenLess 的核心能力是 **AI Prompt 模式**:你自由地说,它来补充结构、整理你的约束条件,生成一段包含上下文的提示词,可直接粘贴进 ChatGPT、Claude 或 Cursor。
@@ -274,7 +276,7 @@ OpenLess 只做一件事:**把语音变成可用的书面文字(尤其是 AI 提
 
 活跃 workspace 位于 `openless-all/app/`：`crates/openless-core` 是框架无关后端，`src-tauri` 承载 macOS/Windows/Android，`linux-egui` 包含 Linux 原生 UI 与平台 Adapter。源码构建 Tauri 前需初始化子模块：即使不编译对应平台代码，Cargo 仍会解析 manifest 中的本地 path 依赖，其中包括 `src-tauri/vendor/` 下的 macOS ASR 引擎，如 [`Open-Less/qwen-asr`](https://github.com/Open-Less/qwen-asr)。根 Core/Linux workspace 排除了 `src-tauri`，其独立检查不解析 Tauri manifest，也不要求这些子模块。阅读入口为 [docs/index.md](docs/index.md)、[架构](docs/architecture.md)和[目录结构](docs/structure.md)。
 
-Rust 1.88 是桌面应用源码（`openless-core`、`src-tauri`）所支持的最低工具链版本；建议使用最新 stable Rust。CI 在 macOS 与 Windows 上同时验证 Rust 1.88 与 stable；Linux egui 宿主需要 Rust 1.95，按 stable 验证。
+Rust 1.99 是整个源码树（`openless-core`、`src-tauri`、`linux-egui`）所支持的最低工具链版本；建议使用最新 stable Rust。CI 在 macOS 与 Windows 上同时验证 Rust 1.99 与 stable，Linux egui 宿主按 stable 验证。
 
 Apple Silicon 编译可选的 Qwen3-ASR MLX 后端时需要 Xcode 的 MetalToolchain 组件。执行 `xcodebuild -downloadComponent MetalToolchain` 安装，并用 `xcrun --find metal` 验证。它只属于源码构建依赖，已打包的 OpenLess 应用运行时不需要该组件。
 
@@ -371,7 +373,7 @@ OpenLess 的润色模型只重塑文本。它不回答问题、不执行任务�
 
 ……而不是一份缺失功能的清单。
 
-长期参考改写的 `raw → polished → rule` 三元组格式见 [Examples/polish-reference-examples.sample.jsonl](Examples/polish-reference-examples.sample.jsonl)。该文件说明参考数据格式；当前模块职责见[架构文档](docs/architecture.md)。
+长期参考改写的 `raw → polished → rule` 三元组格式见 [docs/references/polish-reference-examples.sample.jsonl](docs/references/polish-reference-examples.sample.jsonl)。该文件说明参考数据格式；当前模块职责见[架构文档](docs/architecture.md)。
 
 ## 词典
 

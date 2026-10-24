@@ -16,6 +16,7 @@ import { useTranslation } from 'react-i18next';
 import { Icon } from '../../components/Icon';
 import { Modal } from '../../components/ui/Modal';
 import { useOverlayMotion } from '../../lib/motion';
+import { toggleGroupFeedback } from '../../lib/toggleFeedback';
 import { useSpringReorder } from '../../lib/useSpringReorder';
 import { PageSkeleton } from '../../components/ui/PageSkeleton';
 import { SelectLite } from '../../components/ui/SelectLite';
@@ -83,6 +84,7 @@ export function presetsFor(
   supportsQwen3Mlx = true,
   currentProviderId?: string,
   descriptors: ProviderDescriptor[] = [],
+  supportsLocalAsr = true,
 ): PresetOption[] {
   const descriptorPresets = descriptors.map((descriptor) => ({
     id: descriptor.providerType,
@@ -105,8 +107,10 @@ export function presetsFor(
     if (p.id === 'local-whisper' || p.id === 'apple-speech') return os === 'mac';
     if (p.id === 'local-qwen3-c') return os === 'mac';
     if (p.id === 'local-qwen3') return false;
-    if (p.id === 'foundry-local-whisper' || p.id === 'sherpa-onnx-local') {
-      return os === 'win';
+    if (p.id === 'foundry-local-whisper') return os === 'win';
+    // sherpa-onnx also runs on arm64 Android; the capability is ABI-aware.
+    if (p.id === 'sherpa-onnx-local') {
+      return os === 'win' || (os === 'android' && supportsLocalAsr);
     }
     // The two old Bailian ids are historical aliases; the unified entry is `bailian`, so new cards must not pick them.
     if (p.id === 'bailian-qwen3-realtime' || p.id === 'bailian-fun-asr-flash') return false;
@@ -198,6 +202,40 @@ export function channelRowViewportTop(element: HTMLElement): number {
 /** A test result older than a day is stale news; the faded look signals it may no longer hold. */
 const STALE_TEST_SECONDS = 24 * 60 * 60;
 
+/** Keep the row in place until its actual knob animation has settled. */
+function waitForSwitchSlide(control: HTMLElement): Promise<void> {
+  return new Promise((resolve) => {
+    let frame = 0;
+    let settled = false;
+    const finish = () => {
+      settled = true;
+      window.clearTimeout(deadline);
+      window.cancelAnimationFrame(frame);
+      resolve();
+    };
+    // A hidden window may stop painting; persistence must still settle.
+    const deadline = window.setTimeout(finish, 2000);
+    const waitForAnimations = () => {
+      if (settled) return;
+      const knob = control.querySelector<HTMLElement>('.ol-switch-thumb');
+      const animations = (knob?.getAnimations() ?? []).filter(
+        (animation) => animation.playState !== 'finished' && animation.playState !== 'idle',
+      );
+      if (!animations.length) {
+        finish();
+        return;
+      }
+      void Promise.allSettled(animations.map((animation) => animation.finished)).then(() => {
+        // A quick reversal can replace the transition. Recheck after its events dispatch.
+        if (!settled) frame = window.requestAnimationFrame(waitForAnimations);
+      });
+    };
+    frame = window.requestAnimationFrame(() => {
+      if (!settled) frame = window.requestAnimationFrame(waitForAnimations);
+    });
+  });
+}
+
 type ChannelTestMode = 'provider' | 'local-model' | 'unavailable';
 
 const LOCAL_MODEL_CHANNEL_PROVIDERS = new Set([
@@ -205,6 +243,7 @@ const LOCAL_MODEL_CHANNEL_PROVIDERS = new Set([
   'local-qwen3-mlx',
   'local-qwen3-c',
   'local-whisper',
+  'sherpa-onnx-local',
 ]);
 
 export function channelTestMode(
@@ -252,8 +291,9 @@ export function ChannelList({
   // Intel); starting from os === 'mac' would flash the MLX preset once on Intel Macs when the dropdown
   // opens, then remove it asynchronously. On Apple Silicon the MLX option appears one frame late — acceptable.
   const [supportsQwen3Mlx, setSupportsQwen3Mlx] = useState(false);
+  const [supportsLocalAsr, setSupportsLocalAsr] = useState(false);
   const [descriptors, setDescriptors] = useState<ProviderDescriptor[]>([]);
-  const presets = presetsFor(kind, os, supportsQwen3Mlx, undefined, descriptors);
+  const presets = presetsFor(kind, os, supportsQwen3Mlx, undefined, descriptors, supportsLocalAsr);
   const [channels, setChannels] = useState<Channel[]>([]);
   const [models, setModels] = useState<Record<string, string>>({});
   const [loaded, setLoaded] = useState(false);
@@ -267,7 +307,10 @@ export function ChannelList({
   const autoOpenedRef = useRef(false);
 
   useEffect(() => {
-    void getPlatformCapabilities().then((caps) => setSupportsQwen3Mlx(caps.supportsLocalQwen3Mlx));
+    void getPlatformCapabilities().then((caps) => {
+      setSupportsQwen3Mlx(caps.supportsLocalQwen3Mlx);
+      setSupportsLocalAsr(caps.supportsLocalAsr);
+    });
   }, []);
 
   useEffect(() => {
@@ -386,14 +429,24 @@ export function ChannelList({
     }
   };
 
-  const onToggle = async (channel: Channel) => {
+  const onToggle = async (channel: Channel, control: HTMLElement) => {
+    const enabled = !channel.enabled;
     emitSaved('saving', t('common.saving'));
+    // Flip in place first. Core re-sorts the list (a disabled channel sinks to the end), and
+    // moving a row re-inserts its node, which cancels a running transition: the re-sorted
+    // list lands only once the knob has finished sliding.
+    setChannels((list) =>
+      list.map((item) => (item.id === channel.id ? { ...item, enabled } : item)),
+    );
+    const slid = waitForSwitchSlide(control);
     try {
-      await setChannelEnabled(kind, channel.id, !channel.enabled);
+      await Promise.all([setChannelEnabled(kind, channel.id, enabled), slid]);
       await refresh();
       emitSaved('saved', t('common.saved'));
     } catch (error) {
       console.error('[channels] toggle failed', error);
+      await slid;
+      await refresh();
       emitSaved('failed', t('common.operationFailed'));
     }
   };
@@ -510,6 +563,7 @@ export function ChannelList({
       <div
         ref={reorder.list}
         className="ol-reorder-list"
+        data-ol-toggle-group=""
         style={{
           display: 'flex',
           flexDirection: 'column',
@@ -672,31 +726,20 @@ export function ChannelList({
                   aria-checked={!retired && channel.enabled}
                   disabled={retired}
                   aria-label={t('settings.channels.enabledFor', { name: label })}
-                  onClick={() => void onToggle(channel)}
+                  onClick={(event) => {
+                    if (event.detail > 0) toggleGroupFeedback(event.currentTarget);
+                    void onToggle(channel, event.currentTarget);
+                  }}
                   style={{ ...ghostBtn, display: 'inline-flex', alignItems: 'center', gap: 7 }}
                 >
+                  {/* Same track, knob and timing as the settings Toggle, in its small size. */}
                   <span
                     aria-hidden="true"
-                    style={{
-                      width: 24,
-                      height: 14,
-                      borderRadius: 999,
-                      background:
-                        channel.enabled && !retired ? 'var(--ol-blue)' : 'var(--ol-toggle-off-bg)',
-                      position: 'relative',
-                    }}
+                    className="ol-switch"
+                    data-size="sm"
+                    data-checked={channel.enabled && !retired ? '' : undefined}
                   >
-                    <span
-                      style={{
-                        position: 'absolute',
-                        top: 2,
-                        left: channel.enabled && !retired ? 12 : 2,
-                        width: 10,
-                        height: 10,
-                        borderRadius: 999,
-                        background: 'var(--ol-toggle-knob)',
-                      }}
-                    />
+                    <span className="ol-switch-thumb" />
                   </span>
                   {t('settings.channels.enabled')}
                 </button>
@@ -734,7 +777,14 @@ export function ChannelList({
           key={dialogChannel.id}
           kind={kind}
           channel={dialogChannel}
-          presets={presetsFor(kind, os, supportsQwen3Mlx, dialogChannel.providerType, descriptors)}
+          presets={presetsFor(
+            kind,
+            os,
+            supportsQwen3Mlx,
+            dialogChannel.providerType,
+            descriptors,
+            supportsLocalAsr,
+          )}
           isDraft={dialogIsDraft}
           mobile={mobile}
           closing={dialogMount.closing}

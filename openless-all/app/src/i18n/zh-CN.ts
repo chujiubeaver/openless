@@ -1,3 +1,4 @@
+import { siwcZhCN as siwc } from './siwc';
 // Simplified Chinese resources — kept in sync with the product's current copy.
 // The eight locale files share one structure; add/remove keys in all of them together.
 
@@ -5,6 +6,7 @@ import { uiRefinementZhCN as uiRefinement } from './uiRefinement';
 import { experimentalAsrZhCN as experimentalAsr } from './experimentalAsr';
 
 export const zhCN = {
+  siwc,
   experimentalAsr,
   uiRefinement,
   voiceEdit: {
@@ -290,6 +292,8 @@ export const zhCN = {
     cancelled: '已取消',
     error: '出错了',
     inserted: '已插入 {{count}}',
+    translateTo: '翻译为',
+    translationChangeFailed: '语言切换失败，请重新选择。',
     translating: '正在翻译',
     liveTranslationTag: 'EN',
     selectionPolish: {
@@ -320,6 +324,12 @@ export const zhCN = {
     cancel: '取消',
   },
   qa: {
+    activity: {
+      searchingWeb: '正在搜索网页',
+      readingWeb: '正在阅读网页',
+      usingTool: '正在使用 {{tool}}',
+      tool: '工具',
+    },
     compact: {
       closeError: '关闭失败，请重试。',
       sendError: '发送失败，输入已保留，请重试。',
@@ -332,7 +342,7 @@ export const zhCN = {
       answer: 'OpenLess 回答',
       layoutError: '窗口展开失败，请关闭后重新打开。',
     },
-    title: '划词追问',
+    title: '问任何问题',
     headerHint: '随时提问',
     thinking: '思考中…',
     error: '出错了，请稍后再试。',
@@ -469,7 +479,7 @@ export const zhCN = {
     style: '风格',
     marketplace: '风格市场',
     translation: '翻译',
-    selectionAsk: '划词追问',
+    selectionAsk: '问任何问题',
     quickNote: '速记',
     corrections: '纠正规则',
     polishMode: '润色模式',
@@ -595,7 +605,7 @@ export const zhCN = {
       vocab: '词典：自定义热词，提升专有名词识别率',
       style: '润色风格：管理输出风格与自定义提示词',
       translation: '翻译：按住 Shift 说话，译成目标语言插入',
-      selectionAsk: '划词追问：选中文字后语音提问',
+      selectionAsk: '问任何问题：录音键配合附加键，选中文字可作为上下文',
       quickNote: '速记：保存录音并整理为可回看的记录',
       settings: '偏好设置：快捷键、提供商、隐私与更新',
     },
@@ -1152,8 +1162,20 @@ export const zhCN = {
       fallbackDesc: '翻译失败时回退为插入原始转写，不会丢字。',
     },
   },
+  askAnything: {
+    dictation: '口述',
+    translation: '翻译',
+    question: '问任何问题',
+    dictationHint: '说出想法，直接输入文字',
+    translationHint: '录音时切换目标语言',
+    questionHint: '选中文字，或直接说出问题',
+    description: '按组合键开始提问，再按一次提交。回答会显示在屏幕下方。',
+    auxiliaryKey: '提问附加键',
+    auxiliaryHint: '与录音键 {{key}} 一起按下；修改录音键后会自动跟随。',
+    selectionHint: '选中文字会作为本次问题的上下文；没有选区也可以提问。每次组合键开启一个新问题。',
+  },
   selectionAsk: {
-    title: '划词追问',
+    title: '问任何问题',
     desc: '选中文字后语音提问，支持多轮追问。',
     shortcutSettings: '快捷键设置',
     guide: {
@@ -1276,6 +1298,15 @@ export const zhCN = {
       cursorContextLabel: '光标上下文（实验）',
       cursorContextDesc:
         '润色时把光标附近的一小段文字发给模型作参考，用于专有词、同音词和指代的判断（macOS / Windows / Android）。听写、速记和云笔记都会参考，但上下文本身不会写入笔记、历史或日志；使用云端模型时会随本次润色请求发送给该模型服务。此开关与本地手改学词独立；排除密码框、终端及已知敏感应用。',
+    },
+    localMigration: {
+      title: '本地配置迁移',
+      description:
+        '将所有可迁移的本地配置导出为带版本的迁移文件，或在另一台 Android 设备上恢复。分享模式默认脱敏；个人迁移只有在密码保护下才可以携带凭据。原生流程会在合并或替换前展示来源、版本、类别和变更摘要。',
+      safetyNote: '系统权限、OAuth 会话、设备路径和运行时状态不会迁移。导入前会自动创建本地备份。',
+      open: '打开本地迁移',
+      opening: '正在打开…',
+      openFailed: '无法打开本地迁移流程，请从设置页重试。',
     },
     codingConsole: {
       title: 'Claude 控制台',
@@ -1417,7 +1448,6 @@ export const zhCN = {
       microphoneMonitorError: '输入电平监听失败：{{message}}',
       capsuleLabel: '录音胶囊',
       capsuleDesc: '录音 / 转写时显示屏幕底部胶囊。',
-      capsuleStyleTypeless: 'Typeless 传统风格',
       capsuleTranscriptLabel: '显示流式原文',
       capsuleTranscriptDesc:
         '在胶囊中显示语音识别原文，替换音频条；关闭后恢复原有显示。非流式识别将在结果返回后显示。',
@@ -1427,17 +1457,66 @@ export const zhCN = {
         '录音期间在胶囊中实时显示所说内容的英文翻译，仅供查看，不插入文档、不进历史，录音结束即清除。音频会额外实时发送到当前百炼渠道的翻译模型（qwen3.8-livetranslate-flash-realtime），使用同一 API Key，按音频时长计费。',
       liveTranslationPreviewUnavailableOmni: '需要「多模态模式」且渠道为百炼（dashscope-omni）。',
       liveTranslationPreviewUnavailableStreaming: '当前识别已提供实时原文，此功能不生效。',
+      capsuleDisplayModeLabel: '多屏胶囊',
+      capsuleDisplayModeDesc: '选择录音胶囊显示在哪些屏幕。所有屏幕模式会增加窗口与图形资源占用。',
+      capsuleDisplayCursorScreen: '鼠标所在屏幕',
+      capsuleDisplayPrimaryScreen: '仅主显示器',
+      capsuleDisplayForegroundWindowScreen: '当前前台窗口所在显示器',
+      capsuleDisplayAllScreens: '所有屏幕显示',
+      capsuleDisplayModeRestartTitle: '重启 OpenLess 以应用显示模式',
+      capsuleDisplayModeRestartDesc:
+        '从所有屏幕显示切换需要重启软件，以清理之前的胶囊窗口。现在重启吗？',
       capsuleStyleLabel: '胶囊样式',
       capsuleStyleSiri: '流光 Siri 风格',
-      capsuleStyleClassic: 'Openless 默认风格',
+      capsuleStyleClassic: 'OpenLess 默认风格',
       stableTranscriptionLabel: '稳定模式（先录音后识别）',
       stableTranscriptionDesc:
         '开启后，录音期间不连接 ASR，停止后才提交整段音频。结果出现更晚，但录音不受建连延迟和录音期间网络抖动影响。',
       lowLatencyDictationLabel: '低延迟录音',
       lowLatencyDictationDesc:
         '保持麦克风流就绪，并在内存中保留最多 500 毫秒音频，减少按下热键后第一句话被漏识别的情况。确认录音前不会保存或上传音频；此模式会增加功耗并保持系统麦克风指示灯亮起。',
-      audioEnhancementLabel: '轻量麦克风增强',
-      audioEnhancementDesc: '对本机麦克风应用轻量降噪、增益与软限幅，不包含回声消除。默认关闭。',
+      dsp: {
+        title: '语音增强设置',
+        description: 'RNNoise 更轻量；PureVox 模型降噪耗时较高。设置在下一次录音生效。',
+        noise: '降噪算法',
+        dereverb: '梳状滤波',
+        equalizer: '均衡器',
+        gain: '输入增益',
+        agc: '自动增益',
+        vad: '语音门限',
+        off: '关闭降噪',
+        spectral: '频谱减法',
+        strength: '降噪强度',
+        target: '目标电平',
+        attack: '启动速度',
+        decay: '释放速度',
+        vadHint: '衰减低音量片段，不会停止录音。门限过高可能丢失轻声。',
+        threshold: '语音门限',
+        tone: '音色与房间调整',
+        combHint: '梳状滤波沿用 MicYou 的简单延迟相减，可能改变音色，建议从 0% 开始。',
+        preamp: '均衡器前置增益',
+        order: '处理顺序',
+        up: '上移',
+        down: '下移',
+        reset: '恢复增强默认设置',
+      },
+      audioEnhancementLabel: '语音增强',
+      audioEnhancementDesc:
+        '应用 RNNoise 或 PureVox 降噪、自动增益和限幅。默认关闭，设置在下一次录音生效。',
+      voiceActivationLabel: '语音唤醒听写',
+      voiceActivationDesc:
+        '仅在 Windows 桌面端启用本地语音命令唤醒听写。待机音频只在内存中处理，不会上传或保存；会增加功耗并保持麦克风指示灯亮起。',
+      voiceActivationLocalOnly:
+        '本地识别：说“开始语音录入”开始，说“完成语音录入”结束。需要已安装本地 Zipformer 模型。',
+      voiceActivationMultimodalModels: '此处准备语音唤醒模型，听写仍使用当前多模态服务。',
+      voiceActivationModelMissing: '请先在“AI 服务与模型”的本地模型页准备 Zipformer。',
+      voiceActivationDownloadZipformer: '前往 AI 服务与模型下载 Zipformer',
+      voiceActivationWakeEnabled: '启用开始命令',
+      voiceActivationWakePhrase: '开始命令',
+      voiceActivationFinishEnabled: '启用完成命令',
+      voiceActivationFinishPhrase: '完成命令',
+      voiceActivationTimeoutEnabled: '超时自动结束',
+      voiceActivationTimeoutSeconds: '超时秒数',
       muteDuringRecordingLabel: '录音时静音',
       muteDuringRecordingDesc: '录音期间临时静音系统输出，避免扬声器回音。',
       audioCueLabel: '录音提示音',
@@ -1452,6 +1531,9 @@ export const zhCN = {
       pasteShortcutCtrlV: 'Ctrl+V（默认 / 多数应用）',
       pasteShortcutCtrlShiftV: 'Ctrl+Shift+V（kitty / alacritty / wezterm / 多数终端）',
       pasteShortcutShiftInsert: 'Shift+Insert（xterm / urxvt）',
+      plainTextInsertionLabel: '纯文本插入模式',
+      plainTextInsertionDesc:
+        '开启后，模拟粘贴改用 Shift+Insert 代替 Ctrl+V（开启期间上方快捷键选项不可更改）。仅在极为特殊的情况下才开启，例如 Ctrl+V 被键盘布局切换工具（如 Punto Switcher）吞掉时。仅对「剪贴板粘贴」插入方式生效（仅 Windows）。',
       comboRecordLabel: '录制快捷键',
       comboRecordDesc: '点击后按下想要的快捷键组合（如 ⌘⇧D）。',
       comboRecordBtn: '录制快捷键',
@@ -1507,6 +1589,15 @@ export const zhCN = {
       audioRecordingMaxEntriesLabel: '原始录音保留条数',
       audioRecordingMaxEntriesDesc: '本地保留 wav 文件数上限，留空 = 200。',
       startupGroupTitle: '启动',
+      lowMemoryBackgroundLabel: '低内存后台模式',
+      lowMemoryBackgroundDesc:
+        '重启后生效。关闭主界面时释放窗口，录音时按需显示原生胶囊；空闲时关闭麦克风预热。本地模型仍按原有设置释放。',
+      lowMemoryRestartLabel: '重启后生效',
+      lowMemoryRestartDesc: '低内存后台模式的开关已保存，重启应用后才会切换运行模式。',
+      lowMemoryRestartNow: '立即重启',
+      lowMemoryCapsuleErrorLabel: '原生胶囊不可用',
+      lowMemoryCapsuleErrorDesc:
+        '听写仍可进行，但不会显示悬浮胶囊。辅助程序可能缺失或被系统拦截，请重新安装应用。',
       startMinimizedLabel: '启动时静默运行',
       startMinimizedDesc: '所有启动路径都不弹主窗口，仅菜单栏 / 托盘运行。',
       autoUpdateCheckLabel: '自动检查更新',
@@ -1615,6 +1706,7 @@ export const zhCN = {
         openai: 'OpenAI',
         gemini: 'Google Gemini',
         codexOAuth: 'Codex OAuth',
+        chatgptSiwc: 'ChatGPT Plan',
         mimo: '小米 MiMo',
         cometapi: 'CometAPI',
         openrouterFree: 'OpenRouter（免费模型）',
@@ -1665,9 +1757,9 @@ export const zhCN = {
         omniDashscope: '阿里云百炼 Omni',
       },
       geminiTranscribeNotice:
-        'gemini-3.5-transcribe 在此使用逐字转写，再交给已配置的 LLM 处理。如需内置智能转写，请在多模态模式中选择此模型。录音结束后上传音频，暂不支持实时转写。接口地址：https://generativelanguage.googleapis.com/v1beta，也兼容 /v1beta/interactions。',
+        '两个模型在此均使用逐字转写，可选用已配置的 LLM 继续处理。gemini-3.5-transcribe 在录音结束后上传音频；gemini-3.5-transcribe-live 边说边显示结果，每次录音最长 10 分钟。如需智能转写，请使用多模态模式。接口地址：https://generativelanguage.googleapis.com/v1beta。',
       geminiTranscribeOmniNotice:
-        '使用 gemini-3.5-transcribe 可启用智能转写：录音结束后去除口头语、处理口述纠正并整理排版。支持工作语言和词典词汇。此模型不使用风格提示词，也不支持翻译、纯文本润色或问答；这些任务请使用传统模式搭配 LLM。',
+        'gemini-3.5-transcribe 和 gemini-3.5-transcribe-live 均支持智能转写。Live 边说边显示草稿，每次录音最长 10 分钟；录音结束后，智能转写会去除口头语、处理口述纠正并整理最终文本。两个模型均支持工作语言和词典词汇，但不使用风格提示词，也不支持翻译、纯文本润色或问答；这些任务请使用传统模式搭配 LLM。',
       validateSuccessAudio: '已通过短静音音频的连接验证，请再用短录音确认转写效果。',
       elevenLabsUploadNotice: 'ElevenLabs 会将录音上传到所配置的端点进行批量转写。',
       zenmuxVocabularyNote:
@@ -1697,8 +1789,9 @@ export const zhCN = {
       volcengineAuthModeApiKey: '新版控制台 API Key',
       volcengineMappingNote:
         'Secret Key 当前无需填写。Resource ID 默认使用 volc.seedasr.sauc.duration。',
-      volcengineApiKeyNote:
-        '使用新版语音控制台创建的 API Key 鉴权，无需 APP ID。API Key 在语音控制台「API Key 管理」中创建：console.volcengine.com/speech/new/setting/apikeys。Resource ID 默认使用 volc.seedasr.sauc.duration。',
+      volcengineApiKeyConsole: '豆包语音 · API Key 管理',
+      volcengineApiKeyNote: '使用此处创建的 API Key 鉴权，勿用方舟密钥。',
+      volcengineResourceIdNote: 'Resource ID 默认使用 {{resourceId}}。',
       xfyunAppIdLabel: 'AppID',
       xfyunApiKeyLabel: 'API Key',
       xfyunNote:
@@ -1984,11 +2077,13 @@ export const zhCN = {
         background: '应用退到后台',
         keyboard: '弹出键盘时',
         always: '始终显示',
+        never: '从不显示',
       },
       androidOverlayTriggerHint: {
         background: '省电、实现简单；其他 App 输入时不会自动出现。',
         keyboard: '该模式已暂缓，历史配置会自动改为“应用退到后台”。',
         always: '入口始终可见，但会一直占屏。',
+        never: '永不自动出现，键盘仍可正常使用。',
       },
       androidOverlayTriggerDisabled: {
         keyboard: '“弹出键盘时”暂缓开放，后续将以悬浮窗手势替代键盘检测。',
@@ -2061,12 +2156,18 @@ export const zhCN = {
       streamingInsertHintMac: '临时切到 ABC 输入源，避免 CJK IME 拦截，会话结束后自动切回。',
       streamingInsertHintWindows: 'SendInput Unicode 直接送字符，绕过 TSF / IME，不切输入法。',
       streamingInsertHintLinux: '通过 fcitx5 插件提交文字；流式输入使用 enigo + XTest 合成按键。',
+      windowsCompositionInputLabel: '实时原文显示在输入框（Windows）',
+      windowsCompositionInputDesc:
+        '录音时把识别到的文字以带下划线的组合文本显示在输入框中，结束后替换为最终结果。需要启用 OpenLess 的 TSF 输入法组件，且目标应用支持文本服务框架（TSF）。',
       streamingInsertSaveClipboardLabel: '同步到剪贴板',
       streamingInsertSaveClipboardHint:
         '插入成功后把最终文本写入剪贴板，方便 Cmd+V 再次粘贴；关闭后流式过程不动剪贴板。',
       localAsrTitle: '本地 ASR 模型',
       localAsrDesc: '把转写从云端切到本机推理。仅推荐离线 / 隐私敏感场景。',
       localAsrWarningShort: '本地推理较慢，配置不足时可能吞字。',
+      localAsrFallbackLabel: '云端识别失败时用本地模型',
+      localAsrFallbackDesc:
+        '网络不好或没网时，用已下载的本地模型识别录音，不再等云端重试。需要先下载本地模型。',
       qwen3Desc: '启动之后，ASR 提供商将被接管。',
       sherpaDesc: '启动之后，ASR 提供商将被接管。',
       foundryDesc: '启动之后，ASR 提供商将被接管。',

@@ -26,6 +26,8 @@ import type { ActivityDay, CredentialsStatus, DictationSession, PolishMode } fro
 import { useHotkeySettings } from '../state/HotkeySettingsContext';
 import { Btn, Card, PageHeader, Pill } from './_atoms';
 import { ASR_LABELS } from './settings/shared';
+import { isHarmonyHost } from '../lib/harmonyBridge';
+import { HarmonyDictation } from '../components/HarmonyDictation';
 
 function useModeLabels(): Record<PolishMode, string> {
   const { t } = useTranslation();
@@ -278,6 +280,8 @@ export function Overview({ onOpenHistory, onOpenSettings }: OverviewProps) {
         }
       />
 
+      {isHarmonyHost && <HarmonyDictation onComplete={refreshAll} />}
+
       {showProvidersSection && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, flexShrink: 0 }}>
           <div
@@ -410,7 +414,8 @@ export function Overview({ onOpenHistory, onOpenSettings }: OverviewProps) {
           gridTemplateColumns: mobile ? 'minmax(0, 1fr)' : 'minmax(0, 1fr) minmax(0, 1.4fr)',
           gap: 12,
           flex: 1,
-          minHeight: 0,
+          // Keep the chart readable; when the window is too short the page scrolls instead.
+          minHeight: mobile ? 0 : 260,
         }}
       >
         <PeriodMetricsCard

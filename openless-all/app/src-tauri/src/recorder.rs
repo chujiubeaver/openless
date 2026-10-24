@@ -31,20 +31,133 @@ const TARGET_SAMPLE_RATE: u32 = 16_000;
 const LOG_EVERY_N_CALLBACKS: usize = 50;
 /// RMS -> UI level gain, matching Swift's `min(1.0, rms * 4)`.
 const LEVEL_RMS_GAIN: f32 = 4.0;
-/// Maximum number of native callback blocks waiting for the processing worker.
-const AUDIO_PROCESSING_QUEUE_CAPACITY: usize = 64;
+/// Bound capture backlog by duration and memory, independently of callback size.
+const AUDIO_PROCESSING_MAX_QUEUED_US: u64 = 3_000_000;
+const AUDIO_PROCESSING_MAX_QUEUED_BYTES: usize = 8 * 1024 * 1024;
+const AUDIO_PROCESSING_QUEUE_CAPACITY: usize = 4096;
+/// Shed optional enhancement before a temporary backlog can stop capture.
+const AUDIO_PROCESSING_SHED_ENHANCEMENT_US: u64 = 500_000;
+static NEXT_CAPTURE_ID: AtomicU64 = AtomicU64::new(1);
 /// Max queued PCM chunks for the archive writer thread. When full, new archive chunks are
 /// dropped instead of blocking the realtime callback; ASR still receives the full PCM, and
 /// archive messages accepted before stop are fully flushed.
 const WAV_ARCHIVE_QUEUE_CAPACITY: usize = 256;
 /// The provisional capture cap is 500 ms at the canonical 16 kHz mono i16 format.
 pub(crate) const STAGED_CAPTURE_MAX_BYTES: usize = TARGET_SAMPLE_RATE as usize;
+/// Voice handoff staging keeps up to 30 seconds while the formal dictation session is prepared.
+const VOICE_STAGED_CAPTURE_MAX_BYTES: usize = TARGET_SAMPLE_RATE as usize * 30 * 2;
+/// Voice activation wake/finish inference is fed only after this cheap RMS gate passes.
+/// The level uses the same normalized 0..1 scale as `pcm_rms_level`.
+const ACTIVATION_VAD_RMS_THRESHOLD: f32 = 0.015;
+/// Retain a short silence pre-roll so the first consonant is not lost at the gate boundary.
+const ACTIVATION_VAD_PRE_ROLL_BYTES: usize = TARGET_SAMPLE_RATE as usize * 2 / 5;
+/// Keep sending a few quiet chunks after speech so phrase tails reach the recognizer.
+const ACTIVATION_VAD_HANGOVER_CHUNKS: usize = 8;
+const VOICE_CAPTURE_KEY_PREFIX: u64 = 1 << 63;
+
+// [DEBUG-VOICE-1003] Temporary P1-P6 diagnostics; remove only after user confirmation.
+// Audio/model work never waits for disk I/O. Only the dedicated NDJSON writer opens a file.
+pub(crate) fn voice_diagnostic(
+    probe_id: &'static str,
+    hypothesis_ids: &'static [&'static str],
+    event: &'static str,
+    outcome: &'static str,
+    safe: serde_json::Value,
+) {
+    #[cfg(all(target_os = "windows", not(test)))]
+    {
+        use std::io::Write;
+        static WRITER: OnceLock<Option<SyncSender<serde_json::Value>>> = OnceLock::new();
+        static SEQUENCE: AtomicU64 = AtomicU64::new(0);
+        static DROPPED: AtomicU64 = AtomicU64::new(0);
+        static RUN: OnceLock<String> = OnceLock::new();
+        let run = RUN.get_or_init(|| {
+            format!(
+                "r{:x}",
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_nanos()
+            )
+        });
+        let writer = WRITER.get_or_init(|| {
+            let (tx, rx) = sync_channel::<serde_json::Value>(4096);
+            std::thread::Builder::new().name("voice-1003-diagnostics".into()).spawn(move || {
+                let path = std::env::temp_dir().join("openless-1003-3c02ffc1.ndjson");
+                let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(path) else {
+                    return;
+                };
+                for record in rx {
+                    let Ok(mut line) = serde_json::to_vec(&record) else { continue; };
+                    line.push(b'\n');
+                    if file.write_all(&line).is_err() { break; }
+                }
+            }).ok().map(|_| tx)
+        });
+        if let Some(writer) = writer {
+            let record = serde_json::json!({
+                "schema": "diagnosing-bugs.v1", "session_id": "voice-1003-3c02ffc1",
+                "attempt_id": "A2-terminal-tail", "change_id": "C2-terminal-padding",
+                "run_id": run, "probe_id": probe_id, "hypothesis_ids": hypothesis_ids,
+                "event": event, "outcome": outcome, "safe": safe,
+                "seq": SEQUENCE.fetch_add(1, Ordering::Relaxed),
+                "dropped": DROPPED.load(Ordering::Relaxed),
+                "ts": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default().as_millis().to_string(),
+            });
+            if writer.try_send(record).is_err() { DROPPED.fetch_add(1, Ordering::Relaxed); }
+        }
+    }
+    #[cfg(any(not(target_os = "windows"), test))]
+    let _ = (probe_id, hypothesis_ids, event, outcome, safe);
+}
+
+/// Low-memory mode suppresses optional prewarming, not an explicitly active voice listener.
+pub(crate) fn warm_capture_enabled(
+    low_latency: bool,
+    low_memory: bool,
+    voice_activation: bool,
+) -> bool {
+    voice_activation || (low_latency && !low_memory)
+}
+
+fn voice_capture_key(generation: u64) -> u64 {
+    generation | VOICE_CAPTURE_KEY_PREFIX
+}
 
 /// Downstream that receives resampled Int16 PCM bytes (little-endian).
 pub trait AudioConsumer: Send + Sync {
     /// Each delivery is a little-endian byte sequence of Int16 samples;
     /// the length is always a multiple of 2.
     fn consume_pcm_chunk(&self, pcm: &[u8]);
+
+    /// Mark the end of the current VAD-gated segment without stopping the consumer.
+    /// Consumers that do not maintain streaming endpoint state can ignore this boundary.
+    fn finish_segment(&self) {}
+}
+
+pub(crate) struct AudioConsumerFanout {
+    consumers: Vec<Arc<dyn AudioConsumer>>,
+}
+
+impl AudioConsumerFanout {
+    pub(crate) fn new(consumers: Vec<Arc<dyn AudioConsumer>>) -> Arc<Self> {
+        Arc::new(Self { consumers })
+    }
+}
+
+impl AudioConsumer for AudioConsumerFanout {
+    fn consume_pcm_chunk(&self, pcm: &[u8]) {
+        for consumer in &self.consumers {
+            consumer.consume_pcm_chunk(pcm);
+        }
+    }
+
+    fn finish_segment(&self) {
+        for consumer in &self.consumers {
+            consumer.finish_segment();
+        }
+    }
 }
 
 /// Compatibility bridge for legacy recorder call sites while cloud ASR
@@ -295,7 +408,83 @@ impl CaptureSink {
 struct WarmCaptureSink {
     state: Mutex<WarmCaptureSinkState>,
     delivery_gate: Mutex<()>,
+    activation_consumer: Mutex<Option<Arc<dyn AudioConsumer>>>,
+    activation_consumer_during_capture: AtomicBool,
+    activation_generation: Mutex<Option<u64>>,
+    activation_fault_handler: Mutex<Option<(u64, Arc<dyn Fn(RecorderError) + Send + Sync>)>>,
+    activation_vad: Mutex<ActivationVad>,
     max_bytes: usize,
+}
+
+struct ActivationVadOutput {
+    pcm: Option<Vec<u8>>,
+    end_of_speech: bool,
+}
+
+struct ActivationVad {
+    pre_roll: VecDeque<u8>,
+    speech_active: bool,
+    hangover_chunks: usize,
+}
+
+impl Default for ActivationVad {
+    fn default() -> Self {
+        Self {
+            pre_roll: VecDeque::with_capacity(ACTIVATION_VAD_PRE_ROLL_BYTES),
+            speech_active: false,
+            hangover_chunks: 0,
+        }
+    }
+}
+
+impl ActivationVad {
+    fn reset(&mut self) {
+        self.pre_roll.clear();
+        self.speech_active = false;
+        self.hangover_chunks = 0;
+    }
+
+    /// Return gated PCM and report a single speech-to-silence boundary.
+    /// This deliberately uses one RMS pass and a bounded queue rather than a second model.
+    fn gate(&mut self, pcm: &[u8]) -> ActivationVadOutput {
+        if pcm.is_empty() {
+            return ActivationVadOutput {
+                pcm: None,
+                end_of_speech: false,
+            };
+        }
+        let speech = pcm_rms_level(pcm) >= ACTIVATION_VAD_RMS_THRESHOLD;
+        if speech {
+            let mut output = if self.speech_active {
+                Vec::new()
+            } else {
+                self.pre_roll.iter().copied().collect()
+            };
+            // The current block can be a complete handoff buffer, not just a device chunk.
+            output.extend_from_slice(pcm);
+            self.pre_roll.clear();
+            self.speech_active = true;
+            self.hangover_chunks = ACTIVATION_VAD_HANGOVER_CHUNKS;
+            return ActivationVadOutput {
+                pcm: Some(output),
+                end_of_speech: false,
+            };
+        }
+        if self.speech_active && self.hangover_chunks > 0 {
+            self.hangover_chunks -= 1;
+            return ActivationVadOutput {
+                pcm: Some(pcm.to_vec()),
+                end_of_speech: false,
+            };
+        }
+        WarmCaptureSink::append_bounded(&mut self.pre_roll, pcm, ACTIVATION_VAD_PRE_ROLL_BYTES);
+        let end_of_speech = self.speech_active;
+        self.speech_active = false;
+        ActivationVadOutput {
+            pcm: None,
+            end_of_speech,
+        }
+    }
 }
 
 enum WarmCaptureSinkState {
@@ -309,6 +498,8 @@ enum WarmCaptureClaim {
     Staging {
         pcm: VecDeque<u8>,
         pre_roll_bytes: usize,
+        allow_postroll_eviction: bool,
+        max_bytes: usize,
         max_level: f32,
     },
     Promoted(ForwardTarget),
@@ -323,8 +514,64 @@ impl WarmCaptureSink {
                 claims: HashMap::new(),
             }),
             delivery_gate: Mutex::new(()),
+            activation_consumer: Mutex::new(None),
+            activation_consumer_during_capture: AtomicBool::new(false),
+            activation_generation: Mutex::new(None),
+            activation_fault_handler: Mutex::new(None),
+            activation_vad: Mutex::new(ActivationVad::default()),
             max_bytes,
         })
+    }
+
+    fn activation_consumer_during_capture(&self) -> Option<Arc<dyn AudioConsumer>> {
+        self.activation_consumer_during_capture
+            .load(Ordering::Acquire)
+            .then(|| self.activation_consumer.lock().clone())
+            .flatten()
+    }
+
+    fn set_activation_consumer(&self, consumer: Option<Arc<dyn AudioConsumer>>) {
+        self.activation_consumer_during_capture.store(false, Ordering::Release);
+        *self.activation_consumer.lock() = consumer;
+        self.activation_vad.lock().reset();
+    }
+
+    fn set_activation_consumer_during_capture(&self, consumer: Option<Arc<dyn AudioConsumer>>) {
+        self.activation_consumer_during_capture
+            .store(consumer.is_some(), Ordering::Release);
+        *self.activation_consumer.lock() = consumer;
+        self.activation_vad.lock().reset();
+    }
+
+    fn deliver_activation(&self, consumer: &Arc<dyn AudioConsumer>, pcm: &[u8]) {
+        let (gated, was_active, active, hangover) = {
+            let mut vad = self.activation_vad.lock();
+            let was_active = vad.speech_active;
+            let gated = vad.gate(pcm);
+            (gated, was_active, vad.speech_active, vad.hangover_chunks)
+        };
+        // [DEBUG-VOICE-1003] P1 / H1: transitions plus bounded coverage of sustained noise/silence.
+        static BLOCKS: AtomicU64 = AtomicU64::new(0);
+        let blocks = BLOCKS.fetch_add(1, Ordering::Relaxed);
+        if was_active != active || gated.end_of_speech || blocks % 64 == 0 {
+            voice_diagnostic(
+                "P1",
+                &["H1"],
+                "vad_gate",
+                "observed",
+                serde_json::json!({
+                    "bytes": pcm.len(), "active": active, "hangover": hangover,
+                    "forwarded": gated.pcm.is_some(), "boundary": gated.end_of_speech,
+                    "count": blocks,
+                }),
+            );
+        }
+        if let Some(pcm) = gated.pcm {
+            consumer.consume_pcm_chunk(&pcm);
+        }
+        if gated.end_of_speech {
+            consumer.finish_segment();
+        }
     }
 
     fn append_bounded(buffer: &mut VecDeque<u8>, pcm: &[u8], max_bytes: usize) {
@@ -339,26 +586,42 @@ impl WarmCaptureSink {
     fn append_staged(
         buffer: &mut VecDeque<u8>,
         pre_roll_bytes: &mut usize,
+        allow_postroll_eviction: bool,
         pcm: &[u8],
         max_bytes: usize,
     ) {
         let even_len = pcm.len() & !1;
         let incoming = &pcm[..even_len];
-        let excess = buffer
-            .len()
-            .saturating_add(incoming.len())
-            .saturating_sub(max_bytes);
-        let evictable = excess.min(*pre_roll_bytes);
-        for _ in 0..(evictable / 2) {
+        let excess = buffer.len().saturating_add(incoming.len()).saturating_sub(max_bytes);
+        let evictable_preroll = excess.min(*pre_roll_bytes);
+        for _ in 0..(evictable_preroll / 2) {
             let _ = buffer.pop_front();
             let _ = buffer.pop_front();
         }
-        *pre_roll_bytes -= evictable;
+        *pre_roll_bytes -= evictable_preroll;
+        let evictable_postroll = if allow_postroll_eviction {
+            excess.saturating_sub(evictable_preroll)
+        } else {
+            0
+        };
+        for _ in 0..(evictable_postroll / 2) {
+            let _ = buffer.pop_front();
+            let _ = buffer.pop_front();
+        }
         let available = max_bytes.saturating_sub(buffer.len()) & !1;
         buffer.extend(incoming[..incoming.len().min(available)].iter().copied());
     }
 
-    fn arm(&self, press_id: u64) -> Result<(), RecorderError> {
+    fn arm(&self, press_id: u64, include_preroll: bool) -> Result<(), RecorderError> {
+        self.arm_with_limit(press_id, include_preroll, self.max_bytes)
+    }
+
+    fn arm_with_limit(
+        &self,
+        press_id: u64,
+        include_preroll: bool,
+        max_bytes: usize,
+    ) -> Result<(), RecorderError> {
         let _delivery = self.delivery_gate.lock();
         let mut state = self.state.lock();
         let WarmCaptureSinkState::Ring { pcm, claims } = &mut *state;
@@ -367,11 +630,15 @@ impl WarmCaptureSink {
                 "warm capture generation is already armed".into(),
             ));
         }
+        let max_bytes = max_bytes.max(2) & !1;
+        let staged = include_preroll.then(|| pcm.clone()).unwrap_or_default();
         claims.insert(
             press_id,
             WarmCaptureClaim::Staging {
-                pcm: pcm.clone(),
-                pre_roll_bytes: pcm.len(),
+                pre_roll_bytes: staged.len(),
+                allow_postroll_eviction: !include_preroll,
+                max_bytes,
+                pcm: staged,
                 max_level: 0.0,
             },
         );
@@ -418,8 +685,18 @@ impl WarmCaptureSink {
                 Some(WarmCaptureClaim::Staging { .. }) | None => None,
             }
         };
+        let activation = self
+            .activation_consumer_during_capture
+            .load(Ordering::Acquire)
+            .then(|| self.activation_consumer.lock().clone())
+            .flatten();
         if let Some(target) = target {
-            CaptureSink::deliver(&target, &prefix);
+            if !prefix.is_empty() {
+                CaptureSink::deliver(&target, &prefix);
+                if let Some(activation) = activation {
+                    self.deliver_activation(&activation, &prefix);
+                }
+            }
             (target.level_handler)(staged_level);
         }
         Ok(())
@@ -512,26 +789,51 @@ impl AudioConsumer for WarmCaptureSink {
             return;
         }
         let _delivery = self.delivery_gate.lock();
-        let mut targets = Vec::new();
-        {
+        let (targets, has_promoted_claim, has_staging_claim) = {
             let mut state = self.state.lock();
             let WarmCaptureSinkState::Ring { pcm: ring, claims } = &mut *state;
             Self::append_bounded(ring, pcm, self.max_bytes);
+            let mut targets = Vec::new();
+            let mut has_promoted_claim = false;
+            let mut has_staging_claim = false;
             for claim in claims.values_mut() {
                 match claim {
                     WarmCaptureClaim::Staging {
                         pcm: staged,
                         pre_roll_bytes,
+                        allow_postroll_eviction,
+                        max_bytes,
                         ..
                     } => {
-                        Self::append_staged(staged, pre_roll_bytes, pcm, self.max_bytes);
+                        has_staging_claim = true;
+                        Self::append_staged(
+                            staged,
+                            pre_roll_bytes,
+                            *allow_postroll_eviction,
+                            pcm,
+                            *max_bytes,
+                        );
                     }
-                    WarmCaptureClaim::Promoted(target) => targets.push(target.clone()),
+                    WarmCaptureClaim::Promoted(target) => {
+                        has_promoted_claim = true;
+                        targets.push(target.clone());
+                    }
                 }
             }
-        }
+            (targets, has_promoted_claim, has_staging_claim)
+        };
+        let activation = ((!has_promoted_claim && !has_staging_claim)
+            || (has_promoted_claim
+                && self
+                    .activation_consumer_during_capture
+                    .load(Ordering::Acquire)))
+            .then(|| self.activation_consumer.lock().clone())
+            .flatten();
         for target in targets {
             CaptureSink::deliver(&target, pcm);
+        }
+        if let Some(activation) = activation {
+            self.deliver_activation(&activation, pcm);
         }
     }
 }
@@ -701,6 +1003,76 @@ impl WarmCaptureHub {
         }
     }
 
+    pub(crate) fn activation_consumer_for_capture(&self) -> Option<Arc<dyn AudioConsumer>> {
+        self.sink.activation_consumer_during_capture()
+    }
+
+    pub(crate) fn set_activation_consumer(&self, consumer: Option<Arc<dyn AudioConsumer>>) {
+        self.sink.set_activation_consumer(consumer);
+    }
+
+    pub(crate) fn set_activation_consumer_during_capture(
+        &self,
+        consumer: Option<Arc<dyn AudioConsumer>>,
+    ) {
+        self.sink.set_activation_consumer_during_capture(consumer);
+    }
+
+    pub(crate) fn set_activation_consumer_for_generation(
+        &self,
+        generation: u64,
+        consumer: Option<Arc<dyn AudioConsumer>>,
+        during_capture: bool,
+    ) -> bool {
+        let active_generation = self.sink.activation_generation.lock();
+        if *active_generation != Some(generation) {
+            return false;
+        }
+        if during_capture {
+            self.sink.set_activation_consumer_during_capture(consumer);
+        } else {
+            self.sink.set_activation_consumer(consumer);
+        }
+        true
+    }
+
+    pub(crate) fn set_activation_generation(&self, generation: u64) {
+        *self.sink.activation_generation.lock() = Some(generation);
+    }
+
+    pub(crate) fn clear_activation_generation_if(&self, generation: u64) -> bool {
+        let mut active_generation = self.sink.activation_generation.lock();
+        if *active_generation == Some(generation) {
+            *active_generation = None;
+            true
+        } else {
+            false
+        }
+    }
+
+    pub(crate) fn activation_is_active(&self) -> bool {
+        self.sink.activation_generation.lock().is_some()
+    }
+
+    pub(crate) fn is_cold_capture_active(&self) -> bool {
+        self.cold_capture_active.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn set_activation_fault_handler(
+        &self,
+        generation: u64,
+        handler: Option<Arc<dyn Fn(RecorderError) + Send + Sync>>,
+    ) {
+        *self.sink.activation_fault_handler.lock() = handler.map(|handler| (generation, handler));
+    }
+
+    pub(crate) fn clear_activation_fault_handler_if(&self, generation: u64) {
+        let mut handler = self.sink.activation_fault_handler.lock();
+        if handler.as_ref().is_some_and(|(current, _)| *current == generation) {
+            *handler = None;
+        }
+    }
+
     pub(crate) fn configure(
         &self,
         enabled: bool,
@@ -829,9 +1201,28 @@ impl WarmCaptureHub {
         let staging_claims = self.sink.staging_claim_ids();
         self.runtime_fallback_claims.lock().extend(staging_claims);
         let archives = self.sink.clear();
-        self.notify_runtime_error(error);
+        self.notify_runtime_error(error.clone());
+        let active_activation_generation = *self.sink.activation_generation.lock();
+        let activation_handler = {
+            let mut handler = self.sink.activation_fault_handler.lock();
+            match handler.take() {
+                Some((handler_generation, callback))
+                    if active_activation_generation == Some(handler_generation) =>
+                {
+                    Some(callback)
+                }
+                Some(other) => {
+                    *handler = Some(other);
+                    None
+                }
+                None => None,
+            }
+        };
         for archive in archives {
             archive.finish();
+        }
+        if let Some(handler) = activation_handler {
+            handler(error);
         }
     }
 
@@ -875,21 +1266,78 @@ impl WarmCaptureHub {
         device_name: Option<String>,
         processing: openless_core::AudioProcessingConfig,
     ) -> Result<WarmStagedRecorder, RecorderError> {
+        self.arm_internal(
+            press_id,
+            device_name,
+            true,
+            STAGED_CAPTURE_MAX_BYTES,
+            Some(processing),
+        )
+    }
+
+    pub(crate) fn arm_with_preroll(
+        self: &Arc<Self>,
+        press_id: u64,
+        device_name: Option<String>,
+    ) -> Result<WarmStagedRecorder, RecorderError> {
+        self.arm_internal(
+            voice_capture_key(press_id),
+            device_name,
+            true,
+            VOICE_STAGED_CAPTURE_MAX_BYTES,
+            None,
+        )
+    }
+
+    pub(crate) fn arm_without_preroll(
+        self: &Arc<Self>,
+        press_id: u64,
+        device_name: Option<String>,
+    ) -> Result<WarmStagedRecorder, RecorderError> {
+        self.arm_internal(
+            voice_capture_key(press_id),
+            device_name,
+            false,
+            VOICE_STAGED_CAPTURE_MAX_BYTES,
+            None,
+        )
+    }
+
+    fn arm_internal(
+        self: &Arc<Self>,
+        press_id: u64,
+        device_name: Option<String>,
+        include_preroll: bool,
+        staged_max_bytes: usize,
+        processing: Option<openless_core::AudioProcessingConfig>,
+    ) -> Result<WarmStagedRecorder, RecorderError> {
         if !self.enabled.load(Ordering::Acquire) {
             return Err(RecorderError::EngineFailed(
                 "warm capture is disabled".into(),
             ));
         }
+        if self.cold_capture_active.load(Ordering::Acquire) {
+            return Err(RecorderError::EngineFailed(
+                "warm capture is unavailable during cold capture".into(),
+            ));
+        }
         loop {
             let lifecycle = self.lifecycle_gate.lock();
+            let desired_processing = processing.unwrap_or(*self.processing_config.lock());
             if *self.device_name.lock() != device_name
-                || *self.processing_config.lock() != processing
+                || *self.processing_config.lock() != desired_processing
             {
+                if self.sink.has_promoted_claims() {
+                    return Err(RecorderError::EngineFailed(
+                        "warm capture device change is deferred while capture is active".into(),
+                    ));
+                }
                 drop(lifecycle);
-                self.configure(true, device_name.clone(), processing);
+                self.configure(true, device_name.clone(), desired_processing);
                 continue;
             }
-            self.sink.arm(press_id)?;
+            self.sink
+                .arm_with_limit(press_id, include_preroll, staged_max_bytes)?;
             if let Err(error) = self.ensure_started_locked(device_name.clone()) {
                 self.sink.discard(press_id);
                 return Err(error);
@@ -928,6 +1376,22 @@ impl WarmCaptureHub {
 
     pub(crate) fn begin_cold_capture(&self) -> Result<(), RecorderError> {
         let _lifecycle = self.lifecycle_gate.lock();
+        self.begin_cold_capture_locked()
+    }
+
+    /// Atomically reserve the microphone for a cold recorder and suspend the warm stream.
+    ///
+    /// The reservation is acquired before the stream is stopped while holding the same lifecycle
+    /// gate, so a concurrent warm arm cannot slip into the interval between admission and
+    /// suspension.
+    pub(crate) fn begin_cold_capture_and_suspend(&self) -> Result<(), RecorderError> {
+        let _lifecycle = self.lifecycle_gate.lock();
+        self.begin_cold_capture_locked()?;
+        self.suspend_for_cold_capture_locked();
+        Ok(())
+    }
+
+    fn begin_cold_capture_locked(&self) -> Result<(), RecorderError> {
         if self.cold_capture_active.swap(true, Ordering::AcqRel) {
             return Err(RecorderError::EngineFailed(
                 "another microphone capture is already active".into(),
@@ -1000,6 +1464,10 @@ impl WarmCaptureHub {
     /// preference enabled so the stream can be rebuilt when that recorder stops.
     pub(crate) fn suspend_for_cold_capture(&self) {
         let _lifecycle = self.lifecycle_gate.lock();
+        self.suspend_for_cold_capture_locked();
+    }
+
+    fn suspend_for_cold_capture_locked(&self) {
         self.stream_generation.fetch_add(1, Ordering::AcqRel);
         self.stop_recorder();
         let archives = self.sink.clear();
@@ -1249,6 +1717,13 @@ impl Recorder {
 }
 
 impl StagedRecorder {
+    pub(crate) fn capture_id(&self) -> u64 {
+        self.recorder
+            .as_ref()
+            .map(|recorder| recorder.state.capture_id)
+            .unwrap_or(0)
+    }
+
     pub(crate) fn commit(
         mut self,
         consumer: Arc<dyn AudioConsumer>,
@@ -1521,13 +1996,15 @@ fn run_audio_thread(
 /// Try the selected microphone's native format before other advertised formats/devices.
 fn build_input_stream(
     microphone_device_name: Option<String>,
-    frame_tx: SyncSender<AudioProcessingMessage>,
+    frame_tx: AudioProcessingSender,
     state: Arc<StreamState>,
     stop_flag: Arc<AtomicBool>,
     runtime_error_tx: Sender<RecorderError>,
 ) -> Result<(cpal::Stream, Arc<StreamState>), RecorderError> {
+    let selecting_at = std::time::Instant::now();
     let host = cpal::default_host();
     let selected = select_input_device(&host, microphone_device_name.as_deref())?;
+    state.log_startup_phase("device_selected", selecting_at.elapsed());
     let selected_name = selected.name().ok();
     let start = |device: &cpal::Device| {
         start_device_stream(device, &frame_tx, &state, &stop_flag, &runtime_error_tx)
@@ -1572,7 +2049,7 @@ fn try_input_candidates<T, U>(
 
 fn start_device_stream(
     device: &cpal::Device,
-    frame_tx: &SyncSender<AudioProcessingMessage>,
+    frame_tx: &AudioProcessingSender,
     state: &Arc<StreamState>,
     stop_flag: &Arc<AtomicBool>,
     runtime_error_tx: &Sender<RecorderError>,
@@ -1632,12 +2109,13 @@ fn native_input_alternatives(
 fn start_native_config(
     device: &cpal::Device,
     supported: cpal::SupportedStreamConfig,
-    frame_tx: &SyncSender<AudioProcessingMessage>,
+    frame_tx: &AudioProcessingSender,
     state: &Arc<StreamState>,
     stop_flag: &Arc<AtomicBool>,
     runtime_error_tx: &Sender<RecorderError>,
 ) -> Result<(cpal::Stream, Arc<StreamState>), RecorderError> {
     let config = supported.config();
+    let building_at = std::time::Instant::now();
     state.accepting_audio.store(false, Ordering::Release);
     let stream = build_stream_for_format(
         device,
@@ -1650,10 +2128,13 @@ fn start_native_config(
         config.channels as usize,
         runtime_error_tx.clone(),
     )?;
+    state.log_startup_phase("stream_built", building_at.elapsed());
+    let playing_at = std::time::Instant::now();
     stream
         .play()
         .map_err(|error| classify_default_config_err(format!("play: {error}")))?;
     state.accepting_audio.store(true, Ordering::Release);
+    state.log_startup_phase("stream_playing", playing_at.elapsed());
     log::info!(
         "[recorder] inputDevice={} inputFormat sampleRate={} channels={} fmt={:?}",
         device.name().unwrap_or_else(|_| "<unknown>".into()),
@@ -1749,7 +2230,7 @@ fn build_stream_for_format(
     device: &cpal::Device,
     config: &StreamConfig,
     sample_format: SampleFormat,
-    frame_tx: SyncSender<AudioProcessingMessage>,
+    frame_tx: AudioProcessingSender,
     state: Arc<StreamState>,
     stop_flag: Arc<AtomicBool>,
     input_sr: u32,
@@ -1779,6 +2260,9 @@ fn build_stream_for_format(
                         if !state.accepting_audio.load(Ordering::Acquire) {
                             return;
                         }
+                        if !data.is_empty() {
+                            state.note_first_pcm(false);
+                        }
                         let mut floats = Vec::with_capacity(data.len());
                         for s in data {
                             floats.push($to_f32(*s));
@@ -1791,13 +2275,21 @@ fn build_stream_for_format(
                         })) {
                             Ok(()) => {}
                             Err(TrySendError::Disconnected(_)) => {
+                                if state.accepting_audio.swap(false, Ordering::AcqRel) {
+                                    let _ = runtime_error_for_callback.send(
+                                        RecorderError::EngineFailed("audio processing worker disconnected".into()),
+                                    );
+                                }
                                 stop_flag.store(true, Ordering::Release);
                             }
                             Err(TrySendError::Full(_)) => {
                                 if state.accepting_audio.swap(false, Ordering::AcqRel) {
                                     let _ = runtime_error_for_callback.send(
                                         RecorderError::EngineFailed(
-                                            "audio processing queue overflow".into(),
+                                            format!("audio processing backlog exceeded limit: queued_us={} queued_bytes={} callback_samples={} sample_rate={} channels={}",
+                                                frame_tx.backlog.micros.load(Ordering::Acquire),
+                                                frame_tx.backlog.bytes.load(Ordering::Acquire),
+                                                data.len(), input_sr, channels),
                                         ),
                                     );
                                 }
@@ -1849,9 +2341,110 @@ enum AudioProcessingMessage {
     Shutdown,
 }
 
+#[derive(Default)]
+struct AudioProcessingBacklog {
+    micros: AtomicU64,
+    bytes: AtomicUsize,
+}
+
+struct AudioProcessingReservation {
+    backlog: Arc<AudioProcessingBacklog>,
+    micros: u64,
+    bytes: usize,
+}
+
+impl Drop for AudioProcessingReservation {
+    fn drop(&mut self) {
+        self.backlog.micros.fetch_sub(self.micros, Ordering::AcqRel);
+        self.backlog.bytes.fetch_sub(self.bytes, Ordering::AcqRel);
+    }
+}
+
+struct QueuedAudioProcessingMessage {
+    message: AudioProcessingMessage,
+    _reservation: Option<AudioProcessingReservation>,
+}
+
+#[derive(Clone)]
+struct AudioProcessingSender {
+    sender: SyncSender<QueuedAudioProcessingMessage>,
+    backlog: Arc<AudioProcessingBacklog>,
+}
+
+impl AudioProcessingSender {
+    fn reserve(
+        &self,
+        message: AudioProcessingMessage,
+    ) -> Result<QueuedAudioProcessingMessage, AudioProcessingMessage> {
+        let reservation = if let AudioProcessingMessage::Frame(frame) = &message {
+            let rate = u64::from(frame.input_sample_rate) * frame.channels as u64;
+            if rate == 0 {
+                return Err(message);
+            }
+            let micros = (frame.samples.len() as u64 * 1_000_000).div_ceil(rate);
+            let bytes = frame.samples.len() * std::mem::size_of::<f32>();
+            if self
+                .backlog
+                .bytes
+                .try_update(Ordering::AcqRel, Ordering::Acquire, |used| {
+                    used.checked_add(bytes)
+                        .filter(|next| *next <= AUDIO_PROCESSING_MAX_QUEUED_BYTES)
+                })
+                .is_err()
+            {
+                return Err(message);
+            }
+            if self
+                .backlog
+                .micros
+                .try_update(Ordering::AcqRel, Ordering::Acquire, |used| {
+                    used.checked_add(micros)
+                        .filter(|next| *next <= AUDIO_PROCESSING_MAX_QUEUED_US)
+                })
+                .is_err()
+            {
+                self.backlog.bytes.fetch_sub(bytes, Ordering::AcqRel);
+                return Err(message);
+            }
+            Some(AudioProcessingReservation {
+                backlog: Arc::clone(&self.backlog),
+                micros,
+                bytes,
+            })
+        } else {
+            None
+        };
+        Ok(QueuedAudioProcessingMessage {
+            message,
+            _reservation: reservation,
+        })
+    }
+
+    fn try_send(
+        &self,
+        message: AudioProcessingMessage,
+    ) -> Result<(), TrySendError<AudioProcessingMessage>> {
+        let queued = self.reserve(message).map_err(TrySendError::Full)?;
+        self.sender.try_send(queued).map_err(|error| match error {
+            TrySendError::Full(queued) => TrySendError::Full(queued.message),
+            TrySendError::Disconnected(queued) => TrySendError::Disconnected(queued.message),
+        })
+    }
+
+    fn send(
+        &self,
+        message: AudioProcessingMessage,
+    ) -> Result<(), std::sync::mpsc::SendError<AudioProcessingMessage>> {
+        let queued = self.reserve(message).map_err(std::sync::mpsc::SendError)?;
+        self.sender
+            .send(queued)
+            .map_err(|error| std::sync::mpsc::SendError(error.0.message))
+    }
+}
+
 struct AudioProcessingWorker {
     join_handle: Option<JoinHandle<()>>,
-    shutdown: SyncSender<AudioProcessingMessage>,
+    shutdown: AudioProcessingSender,
 }
 
 impl AudioProcessingWorker {
@@ -1861,33 +2454,64 @@ impl AudioProcessingWorker {
         level_handler: Arc<dyn Fn(f32) + Send + Sync>,
         archiver: Option<Arc<WavArchiveWriter>>,
         state: Arc<StreamState>,
-    ) -> Result<(Self, SyncSender<AudioProcessingMessage>), RecorderError> {
+    ) -> Result<(Self, AudioProcessingSender), RecorderError> {
         let (sender, receiver) =
-            sync_channel::<AudioProcessingMessage>(AUDIO_PROCESSING_QUEUE_CAPACITY);
+            sync_channel::<QueuedAudioProcessingMessage>(AUDIO_PROCESSING_QUEUE_CAPACITY);
+        let backlog = Arc::new(AudioProcessingBacklog::default());
+        let sender = AudioProcessingSender {
+            sender,
+            backlog: Arc::clone(&backlog),
+        };
         let join_handle = thread::Builder::new()
             .name("openless-audio-processor".into())
             .spawn(move || {
                 let mut processor = openless_core::AudioProcessor::new(processing);
-                while let Ok(message) = receiver.recv() {
+                let mut enhancement_enabled = processing.enhancement_enabled;
+                let deliver = |chunk: openless_core::audio::NormalizedPcmChunk| {
+                    state.note_first_pcm(true);
+                    consumer.consume_pcm_chunk(&chunk.pcm_i16_le);
+                    if let Some(archiver) = &archiver {
+                        archiver.append(&chunk.pcm_i16_le);
+                    }
+                    level_handler(chunk.level);
+                    update_peak(&state.peak_output_rms_milli, chunk.level);
+                };
+                while let Ok(queued) = receiver.recv() {
+                    // Keep the reservation until downstream delivery completes.
+                    let QueuedAudioProcessingMessage { message, _reservation } = queued;
                     match message {
                         AudioProcessingMessage::Frame(frame) => {
+                            let queued_us = backlog.micros.load(Ordering::Acquire);
+                            if enhancement_enabled && queued_us >= AUDIO_PROCESSING_SHED_ENHANCEMENT_US {
+                                log::warn!("[recorder] disabling enhancement for this capture: processing backlog {} ms", queued_us / 1_000);
+                                if let Some(tail) = processor.disable_enhancement() {
+                                    deliver(tail);
+                                }
+                                enhancement_enabled = false;
+                            }
                             if let Some(chunk) = processor.process(
                                 &frame.samples,
                                 frame.channels,
                                 frame.input_sample_rate,
                             ) {
-                                consumer.consume_pcm_chunk(&chunk.pcm_i16_le);
-                                if let Some(archiver) = &archiver {
-                                    archiver.append(&chunk.pcm_i16_le);
-                                }
-                                level_handler(chunk.level);
-                                update_peak(&state.peak_output_rms_milli, chunk.level);
+                                deliver(chunk);
                             }
                         }
                         AudioProcessingMessage::Flush(done) => {
+                            if let Some(chunk) = processor.finish() {
+                                deliver(chunk);
+                            }
+                            // A warm microphone reuses this worker across recording segments.
+                            processor = openless_core::AudioProcessor::new(processing);
+                            enhancement_enabled = processing.enhancement_enabled;
                             let _ = done.send(());
                         }
-                        AudioProcessingMessage::Shutdown => break,
+                        AudioProcessingMessage::Shutdown => {
+                            if let Some(chunk) = processor.finish() {
+                                deliver(chunk);
+                            }
+                            break;
+                        }
                     }
                 }
             })
@@ -1919,7 +2543,11 @@ impl AudioProcessingWorker {
 
 /// State carried across callbacks: resample leftovers, diagnostic counters and peak.
 struct StreamState {
-    processor_sender: Mutex<Option<SyncSender<AudioProcessingMessage>>>,
+    capture_id: u64,
+    created_at: std::time::Instant,
+    first_raw_pcm_us: AtomicU64,
+    first_output_pcm_us: AtomicU64,
+    processor_sender: Mutex<Option<AudioProcessingSender>>,
     /// Fractional position left unconsumed by the previous callback; linear-interpolation
     /// resampling spans buffers.
     resample_phase: Mutex<f64>,
@@ -1937,6 +2565,10 @@ struct StreamState {
 impl StreamState {
     fn new() -> Self {
         Self {
+            capture_id: NEXT_CAPTURE_ID.fetch_add(1, Ordering::Relaxed),
+            created_at: std::time::Instant::now(),
+            first_raw_pcm_us: AtomicU64::new(0),
+            first_output_pcm_us: AtomicU64::new(0),
             processor_sender: Mutex::new(None),
             resample_phase: Mutex::new(0.0),
             last_sample: Mutex::new(0.0),
@@ -1947,6 +2579,40 @@ impl StreamState {
             // Start as None: timing begins only after the first callback, avoiding false
             // positives for slow-starting devices
             last_callback_time: Mutex::new(None),
+        }
+    }
+
+    fn log_startup_phase(&self, phase: &'static str, duration: std::time::Duration) {
+        log::info!(
+            "[audio-startup] capture={} phase={} duration_us={} since_open_us={}",
+            self.capture_id,
+            phase,
+            duration.as_micros(),
+            self.created_at.elapsed().as_micros()
+        );
+    }
+
+    fn note_first_pcm(&self, processed: bool) {
+        let slot = if processed {
+            &self.first_output_pcm_us
+        } else {
+            &self.first_raw_pcm_us
+        };
+        let elapsed = self.created_at.elapsed().as_micros().max(1) as u64;
+        if slot
+            .compare_exchange(0, elapsed, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+        {
+            log::info!(
+                "[audio-startup] capture={} phase={} since_open_us={}",
+                self.capture_id,
+                if processed {
+                    "first_output_pcm"
+                } else {
+                    "first_raw_pcm"
+                },
+                elapsed
+            );
         }
     }
 }
@@ -1964,6 +2630,7 @@ fn process_callback(
     if !state.accepting_audio.load(Ordering::Acquire) || interleaved.is_empty() || channels == 0 {
         return;
     }
+    state.note_first_pcm(false);
 
     let mono = downmix_to_mono(interleaved, channels);
     let input_rms = rms(&mono);
@@ -1976,6 +2643,7 @@ fn process_callback(
     let (pcm_bytes, output_rms) = quantize_to_i16_le(&resampled);
     let level = (output_rms * LEVEL_RMS_GAIN).clamp(0.0, 1.0);
 
+    state.note_first_pcm(true);
     consumer.consume_pcm_chunk(&pcm_bytes);
     if let Some(arch) = archiver {
         arch.append(&pcm_bytes);
@@ -2232,12 +2900,149 @@ mod tests {
     #[derive(Default)]
     struct RecordingConsumer {
         chunks: StdMutex<Vec<Vec<u8>>>,
+        segment_flushes: StdMutex<usize>,
     }
 
     impl AudioConsumer for RecordingConsumer {
         fn consume_pcm_chunk(&self, pcm: &[u8]) {
             self.chunks.lock().unwrap().push(pcm.to_vec());
         }
+
+        fn finish_segment(&self) {
+            *self.segment_flushes.lock().unwrap() += 1;
+        }
+    }
+
+    #[test]
+    fn audio_processing_budget_is_duration_based_and_released_on_disconnect() {
+        for samples in [48, 480, 4800] {
+            let (tx, rx) = sync_channel(AUDIO_PROCESSING_QUEUE_CAPACITY);
+            let sender = AudioProcessingSender {
+                sender: tx,
+                backlog: Arc::new(AudioProcessingBacklog::default()),
+            };
+            let frame = || {
+                AudioProcessingMessage::Frame(RawAudioFrame {
+                    samples: vec![0.25; samples],
+                    channels: 1,
+                    input_sample_rate: 48_000,
+                })
+            };
+            let frames = 3 * 48_000 / samples;
+            for _ in 0..frames {
+                assert!(sender.try_send(frame()).is_ok());
+            }
+            assert!(matches!(
+                sender.try_send(frame()),
+                Err(TrySendError::Full(_))
+            ));
+            assert_eq!(sender.backlog.micros.load(Ordering::Acquire), 3_000_000);
+            assert_eq!(sender.backlog.bytes.load(Ordering::Acquire), 3 * 48_000 * 4);
+            drop(rx);
+            assert_eq!(sender.backlog.micros.load(Ordering::Acquire), 0);
+            assert_eq!(sender.backlog.bytes.load(Ordering::Acquire), 0);
+            assert!(matches!(
+                sender.try_send(frame()),
+                Err(TrySendError::Disconnected(_))
+            ));
+            assert_eq!(sender.backlog.micros.load(Ordering::Acquire), 0);
+            assert_eq!(sender.backlog.bytes.load(Ordering::Acquire), 0);
+        }
+    }
+
+    #[test]
+    fn audio_processing_budget_also_bounds_large_multichannel_frames() {
+        let (tx, _rx) = sync_channel(AUDIO_PROCESSING_QUEUE_CAPACITY);
+        let sender = AudioProcessingSender {
+            sender: tx,
+            backlog: Arc::new(AudioProcessingBacklog::default()),
+        };
+        let frame = AudioProcessingMessage::Frame(RawAudioFrame {
+            samples: vec![0.0; 48_000 * 64],
+            channels: 64,
+            input_sample_rate: 48_000,
+        });
+        assert!(matches!(sender.try_send(frame), Err(TrySendError::Full(_))));
+        assert_eq!(sender.backlog.micros.load(Ordering::Acquire), 0);
+        assert_eq!(sender.backlog.bytes.load(Ordering::Acquire), 0);
+    }
+
+    #[test]
+    fn audio_processing_backlog_sheds_enhancement_without_losing_pcm() {
+        let consumer = Arc::new(RecordingConsumer::default());
+        let (entered_tx, entered_rx) = channel();
+        let (resume_tx, resume_rx) = channel();
+        let resume_rx = Mutex::new(resume_rx);
+        let block_next_level = Arc::new(AtomicBool::new(false));
+        let block_for_level = Arc::clone(&block_next_level);
+        let level_handler = Arc::new(move |_| {
+            if block_for_level.swap(false, Ordering::AcqRel) {
+                entered_tx.send(()).unwrap();
+                resume_rx
+                    .lock()
+                    .recv_timeout(std::time::Duration::from_secs(5))
+                    .unwrap();
+            }
+        });
+        let (worker, sender) = AudioProcessingWorker::start(
+            openless_core::AudioProcessingConfig {
+                enhancement_enabled: true,
+                ..Default::default()
+            },
+            Arc::clone(&consumer) as Arc<dyn AudioConsumer>,
+            level_handler,
+            None,
+            Arc::new(StreamState::new()),
+        )
+        .unwrap();
+        for _ in 0..2 {
+            block_next_level.store(true, Ordering::Release);
+            sender
+                .send(AudioProcessingMessage::Frame(RawAudioFrame {
+                    samples: vec![0.25; 997],
+                    channels: 1,
+                    input_sample_rate: TARGET_SAMPLE_RATE,
+                }))
+                .unwrap();
+            entered_rx
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .unwrap();
+            // One second of short callbacks exceeds the old 64-message limit.
+            for _ in 0..100 {
+                assert!(sender
+                    .try_send(AudioProcessingMessage::Frame(RawAudioFrame {
+                        samples: vec![0.5; 160],
+                        channels: 1,
+                        input_sample_rate: TARGET_SAMPLE_RATE,
+                    }))
+                    .is_ok());
+            }
+            resume_tx.send(()).unwrap();
+            let (done_tx, done_rx) = channel();
+            sender.send(AudioProcessingMessage::Flush(done_tx)).unwrap();
+            done_rx
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .unwrap();
+        }
+        worker.finish();
+        let delivered: Vec<u8> = consumer
+            .chunks
+            .lock()
+            .unwrap()
+            .iter()
+            .flatten()
+            .copied()
+            .collect();
+        let segment_samples = 997 + 160 * 100;
+        assert_eq!(delivered.len(), segment_samples * 2 * 2);
+        let decoded = decode_i16_le(&delivered);
+        assert_eq!(&decoded[..segment_samples], &decoded[segment_samples..]);
+        assert!(decoded[..997].iter().any(|sample| *sample != 8191));
+        assert!(decoded[997..segment_samples]
+            .iter()
+            .all(|sample| *sample == 16383));
+        assert_eq!(sender.backlog.micros.load(Ordering::Acquire), 0);
+        assert_eq!(sender.backlog.bytes.load(Ordering::Acquire), 0);
     }
 
     #[test]
@@ -2247,6 +3052,7 @@ mod tests {
         let (worker, sender) = AudioProcessingWorker::start(
             openless_core::AudioProcessingConfig {
                 enhancement_enabled: true,
+                ..Default::default()
             },
             Arc::clone(&consumer) as Arc<dyn AudioConsumer>,
             Arc::new(|_| {}),
@@ -2266,7 +3072,75 @@ mod tests {
 
         let chunks = consumer.chunks.lock().unwrap();
         assert_eq!(chunks.len(), 1);
-        assert_eq!(decode_i16_le(&chunks[0]), vec![12287, -12287]);
+        assert_eq!(decode_i16_le(&chunks[0]).len(), 2);
+    }
+
+    #[test]
+    fn audio_processing_flush_delivers_tail_to_asr_and_archive_before_reset() {
+        let consumer = Arc::new(RecordingConsumer::default());
+        let path = std::env::temp_dir().join(format!(
+            "openless-dsp-tail-{}-{}.wav",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let archive = Arc::new(WavArchiveWriter::create(&path).unwrap());
+        let (worker, sender) = AudioProcessingWorker::start(
+            openless_core::AudioProcessingConfig {
+                enhancement_enabled: true,
+                ..Default::default()
+            },
+            Arc::clone(&consumer) as Arc<dyn AudioConsumer>,
+            Arc::new(|_| {}),
+            Some(archive.clone()),
+            Arc::new(StreamState::new()),
+        )
+        .unwrap();
+        sender
+            .send(AudioProcessingMessage::Frame(RawAudioFrame {
+                samples: vec![0.15; 317],
+                channels: 1,
+                input_sample_rate: TARGET_SAMPLE_RATE,
+            }))
+            .unwrap();
+        let (done_tx, done_rx) = channel();
+        sender.send(AudioProcessingMessage::Flush(done_tx)).unwrap();
+        done_rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap();
+        assert_eq!(
+            consumer
+                .chunks
+                .lock()
+                .unwrap()
+                .iter()
+                .map(Vec::len)
+                .sum::<usize>(),
+            317 * 2
+        );
+        sender
+            .send(AudioProcessingMessage::Frame(RawAudioFrame {
+                samples: vec![-0.15; 211],
+                channels: 1,
+                input_sample_rate: TARGET_SAMPLE_RATE,
+            }))
+            .unwrap();
+        worker.finish();
+        archive.finish();
+        let delivered: Vec<u8> = consumer
+            .chunks
+            .lock()
+            .unwrap()
+            .iter()
+            .flatten()
+            .copied()
+            .collect();
+        assert_eq!(delivered.len(), (317 + 211) * 2);
+        let wav = std::fs::read(&path).unwrap();
+        assert_eq!(&wav[44..], delivered);
+        std::fs::remove_file(&path).unwrap();
     }
 
     #[test]
@@ -2275,6 +3149,7 @@ mod tests {
         let (worker, sender) = AudioProcessingWorker::start(
             openless_core::AudioProcessingConfig {
                 enhancement_enabled: false,
+                ..Default::default()
             },
             Arc::clone(&consumer) as Arc<dyn AudioConsumer>,
             Arc::new(|_| {}),
@@ -2315,6 +3190,160 @@ mod tests {
             .chunks_exact(2)
             .map(|chunk| i16::from_le_bytes([chunk[0], chunk[1]]))
             .collect()
+    }
+
+    #[test]
+    fn warm_promotion_replays_staged_prefix_to_finish_consumer() {
+        let sink = WarmCaptureSink::new(STAGED_CAPTURE_MAX_BYTES);
+        let formal = Arc::new(RecordingConsumer::default());
+        let finish = Arc::new(RecordingConsumer::default());
+        sink.arm_with_limit(7, false, VOICE_STAGED_CAPTURE_MAX_BYTES)
+            .unwrap();
+        sink.set_activation_consumer_during_capture(Some(
+            Arc::clone(&finish) as Arc<dyn AudioConsumer>
+        ));
+        let speech = [0x00, 0x40].repeat(16_000);
+        sink.consume_pcm_chunk(&speech);
+
+        sink.promote(
+            7,
+            Arc::clone(&formal) as Arc<dyn AudioConsumer>,
+            Arc::new(|_| {}),
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(formal.chunks.lock().unwrap().as_slice(), &[speech.to_vec()]);
+        assert_eq!(finish.chunks.lock().unwrap().as_slice(), &[speech.to_vec()]);
+    }
+
+    #[test]
+    fn warm_promotion_replays_bounded_preroll_to_formal_consumer() {
+        let sink = WarmCaptureSink::new(STAGED_CAPTURE_MAX_BYTES);
+        let formal = Arc::new(RecordingConsumer::default());
+        let prefix = vec![1, 2, 3, 4];
+        let speech = vec![0x00, 0x40, 0x00, 0x40];
+        sink.consume_pcm_chunk(&prefix);
+        sink.arm_with_limit(8, true, STAGED_CAPTURE_MAX_BYTES)
+            .unwrap();
+        sink.consume_pcm_chunk(&speech);
+
+        sink.promote(
+            8,
+            Arc::clone(&formal) as Arc<dyn AudioConsumer>,
+            Arc::new(|_| {}),
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(
+            formal.chunks.lock().unwrap().as_slice(),
+            &[vec![1, 2, 3, 4, 0x00, 0x40, 0x00, 0x40]]
+        );
+    }
+    #[test]
+    fn low_memory_disables_only_optional_warm_capture() {
+        for low_latency in [false, true] {
+            for low_memory in [false, true] {
+                assert!(warm_capture_enabled(low_latency, low_memory, true));
+            }
+        }
+        assert!(warm_capture_enabled(true, false, false));
+        assert!(!warm_capture_enabled(true, true, false));
+        assert!(!warm_capture_enabled(false, false, false));
+        assert!(!warm_capture_enabled(false, true, false));
+    }
+
+    #[test]
+    fn activation_vad_skips_silence_and_preserves_speech_onset() {
+        let sink = WarmCaptureSink::new(STAGED_CAPTURE_MAX_BYTES);
+        let activation = Arc::new(RecordingConsumer::default());
+        sink.set_activation_consumer(Some(Arc::clone(&activation) as Arc<dyn AudioConsumer>));
+        let silence = vec![0; 320];
+        sink.consume_pcm_chunk(&silence);
+        assert!(activation.chunks.lock().unwrap().is_empty());
+
+        let speech = vec![0x00, 0x40, 0x00, 0x40];
+        sink.consume_pcm_chunk(&speech);
+        let chunks = activation.chunks.lock().unwrap();
+        assert_eq!(chunks.len(), 1);
+        assert!(chunks[0].ends_with(&speech));
+    }
+
+    #[test]
+    fn activation_vad_preserves_large_blocks_and_does_not_replay_forwarded_audio() {
+        let mut vad = ActivationVad::default();
+        let silence = vec![0; ACTIVATION_VAD_PRE_ROLL_BYTES + 320];
+        assert!(vad.gate(&silence).pcm.is_none());
+        let speech = [0x00, 0x40].repeat(16_000);
+        let first = vad.gate(&speech).pcm.unwrap();
+        assert_eq!(first.len(), ACTIVATION_VAD_PRE_ROLL_BYTES + speech.len());
+        assert_eq!(
+            &first[..ACTIVATION_VAD_PRE_ROLL_BYTES],
+            &silence[..ACTIVATION_VAD_PRE_ROLL_BYTES]
+        );
+        assert_eq!(&first[ACTIVATION_VAD_PRE_ROLL_BYTES..], &speech);
+        assert_eq!(vad.gate(&speech[..320]).pcm.unwrap(), speech[..320]);
+        for _ in 0..ACTIVATION_VAD_HANGOVER_CHUNKS {
+            assert_eq!(vad.gate(&[0; 320]).pcm.unwrap(), [0; 320]);
+        }
+        assert!(vad.gate(&[0; 320]).end_of_speech);
+        let next = vad.gate(&speech[..320]).pcm.unwrap();
+        assert_eq!(next.len(), 640);
+        assert_eq!(&next[320..], &speech[..320]);
+    }
+
+    #[test]
+    fn activation_vad_hangover_is_bounded() {
+        let mut vad = ActivationVad::default();
+        let speech = vec![0x00, 0x40, 0x00, 0x40];
+        assert!(vad.gate(&speech).pcm.is_some());
+        for _ in 0..ACTIVATION_VAD_HANGOVER_CHUNKS {
+            let output = vad.gate(&[0, 0, 0, 0]);
+            assert!(output.pcm.is_some());
+            assert!(!output.end_of_speech);
+        }
+        let output = vad.gate(&[0, 0, 0, 0]);
+        assert!(output.pcm.is_none());
+        assert!(output.end_of_speech);
+        let output = vad.gate(&[0, 0, 0, 0]);
+        assert!(output.pcm.is_none());
+        assert!(!output.end_of_speech);
+    }
+
+    #[test]
+    fn activation_vad_flushes_after_hangover_without_flushing_sustained_silence() {
+        let sink = WarmCaptureSink::new(STAGED_CAPTURE_MAX_BYTES);
+        let activation = Arc::new(RecordingConsumer::default());
+        sink.set_activation_consumer(Some(Arc::clone(&activation) as Arc<dyn AudioConsumer>));
+        let speech = vec![0x00, 0x40, 0x00, 0x40];
+        sink.consume_pcm_chunk(&speech);
+        for _ in 0..=ACTIVATION_VAD_HANGOVER_CHUNKS {
+            sink.consume_pcm_chunk(&[0, 0, 0, 0]);
+        }
+        sink.consume_pcm_chunk(&[0, 0, 0, 0]);
+
+        assert_eq!(*activation.segment_flushes.lock().unwrap(), 1);
+        assert!(activation.chunks.lock().unwrap().len() >= 1);
+    }
+    #[test]
+    fn activation_fault_handler_uses_voice_generation_not_stream_generation() {
+        let hub = WarmCaptureHub::new();
+        let called = Arc::new(AtomicBool::new(false));
+        let called_for_handler = Arc::clone(&called);
+        hub.set_activation_generation(41);
+        hub.set_activation_fault_handler(
+            41,
+            Some(Arc::new(move |_| {
+                called_for_handler.store(true, Ordering::Release);
+            })),
+        );
+
+        // The warm stream generation starts at zero; it is intentionally not the
+        // voice-activation generation owned by Core.
+        hub.stop_after_runtime_error(0, RecorderError::EngineFailed("stream failed".into()));
+
+        assert!(called.load(Ordering::Acquire));
     }
 
     #[test]
@@ -2566,7 +3595,7 @@ mod tests {
     fn warm_sink_captures_bounded_preroll_and_post_press_audio_in_order() {
         let sink = WarmCaptureSink::new(8);
         sink.consume_pcm_chunk(&[1, 2, 3, 4, 5, 6, 7, 8]);
-        sink.arm(17).unwrap();
+        sink.arm(17, true).unwrap();
         sink.consume_pcm_chunk(&[9, 10]);
         sink.publish_level(0.75);
 
@@ -2591,10 +3620,34 @@ mod tests {
     }
 
     #[test]
-    fn warm_sink_preserves_earliest_post_press_audio_after_preroll_eviction() {
+    fn warm_sink_activation_consumer_receives_standby_pcm_without_claiming_archive() {
+        let sink = WarmCaptureSink::new(16);
+        let consumer = Arc::new(RecordingConsumer::default());
+        sink.set_activation_consumer(Some(consumer.clone() as Arc<dyn AudioConsumer>));
+        sink.consume_pcm_chunk(&[1, 2, 3, 4]);
+        sink.set_activation_consumer(None);
+        sink.consume_pcm_chunk(&[5, 6]);
+
+        assert_eq!(consumer.chunks.lock().unwrap().as_slice(), &[vec![1, 2, 3, 4]]);
+        assert!(matches!(&*sink.state.lock(), WarmCaptureSinkState::Ring { .. }));
+    }
+
+    #[test]
+    fn warm_sink_activation_arm_excludes_wake_preroll() {
+        let sink = WarmCaptureSink::new(16);
+        sink.consume_pcm_chunk(&[1, 2, 3, 4]);
+        sink.arm(19, false).unwrap();
+        sink.consume_pcm_chunk(&[5, 6]);
+        let consumer = Arc::new(RecordingConsumer::default());
+        sink.promote(19, consumer.clone(), Arc::new(|_| {}), None)
+            .unwrap();
+        assert_eq!(consumer.chunks.lock().unwrap().as_slice(), &[vec![5, 6]]);
+    }
+    #[test]
+    fn warm_sink_staging_is_bounded_to_the_capture_capacity() {
         let sink = WarmCaptureSink::new(8);
         sink.consume_pcm_chunk(&[1, 2, 3, 4, 5, 6, 7, 8]);
-        sink.arm(17).unwrap();
+        sink.arm(17, true).unwrap();
         sink.consume_pcm_chunk(&[9, 10, 11, 12, 13, 14, 15, 16]);
         sink.consume_pcm_chunk(&[17, 18, 19, 20, 21, 22]);
 
@@ -2609,11 +3662,29 @@ mod tests {
     }
 
     #[test]
+    fn warm_sink_without_preroll_keeps_latest_post_wake_audio() {
+        let sink = WarmCaptureSink::new(8);
+        sink.arm(17, false).unwrap();
+        sink.consume_pcm_chunk(&[1, 2, 3, 4, 5, 6, 7, 8]);
+        sink.consume_pcm_chunk(&[9, 10, 11, 12, 13, 14, 15, 16]);
+        sink.consume_pcm_chunk(&[17, 18, 19, 20, 21, 22]);
+
+        let consumer = Arc::new(RecordingConsumer::default());
+        sink.promote(17, consumer.clone(), Arc::new(|_| {}), None)
+            .unwrap();
+
+        assert_eq!(
+            consumer.chunks.lock().unwrap().as_slice(),
+            &[vec![15, 16, 17, 18, 19, 20, 21, 22]]
+        );
+    }
+
+    #[test]
     fn warm_sink_discard_removes_only_matching_generation() {
         let sink = WarmCaptureSink::new(16);
         sink.consume_pcm_chunk(&[1, 2]);
-        sink.arm(17).unwrap();
-        sink.arm(18).unwrap();
+        sink.arm(17, true).unwrap();
+        sink.arm(18, true).unwrap();
         sink.discard(17);
         sink.consume_pcm_chunk(&[3, 4]);
 
@@ -2670,7 +3741,7 @@ mod tests {
     fn warm_config_change_keeps_staged_claim_on_cold_fallback() {
         let hub = WarmCaptureHub::new();
         hub.enabled.store(true, Ordering::Release);
-        hub.sink.arm(42).unwrap();
+        hub.sink.arm(42, true).unwrap();
 
         hub.configure(
             false,
@@ -2690,7 +3761,7 @@ mod tests {
             let hub = WarmCaptureHub::new();
             hub.enabled.store(true, Ordering::Release);
             for press_id in 1..=claim_count {
-                hub.sink.arm(press_id).unwrap();
+                hub.sink.arm(press_id, true).unwrap();
                 hub.sink
                     .promote(
                         press_id,

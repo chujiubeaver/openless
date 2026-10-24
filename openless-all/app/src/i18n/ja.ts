@@ -1,14 +1,16 @@
+import { siwcJa as siwc } from './siwc';
 import type { zhCN } from './zh-CN';
 import { en } from './en';
 
 // Japanese (Beta) — AI machine translation based; native-speaker review recommended.
 // Structure mirrors zh-CN.ts. When adding new keys, update ja.ts / ko.ts as well
 // (keys not updated fall back to English via ...en).
-import { uiRefinementEn as uiRefinement } from './uiRefinement';
+import { uiRefinementJa as uiRefinement } from './uiRefinement';
 import { experimentalAsrEn as experimentalAsr } from './experimentalAsr';
 
 export const ja: typeof zhCN = {
   ...en,
+  siwc,
   experimentalAsr,
   uiRefinement,
   voiceEdit: {
@@ -162,7 +164,7 @@ export const ja: typeof zhCN = {
       '同期範囲のローカルデータを置き換えます。ローカルの変更を残すにはマージを選んでください。',
     restoreCheck: '復元方法と競合の選択を確認しました。',
     applyRestore: '復元を確認',
-    conflictProgress: '{{total}} 件中 {{selected}} 件を選択済み',
+    conflictProgress: '競合を {{selected}} / {{total}} 件解決済み',
     conflictItem: '競合 {{index}} · {{category}}',
     conflictLocal: 'ローカルを使用',
     conflictCloud: 'クラウドを使用',
@@ -308,6 +310,8 @@ export const ja: typeof zhCN = {
     cancelled: 'キャンセルしました',
     error: 'エラーが発生しました',
     inserted: '{{count}} 文字を入力しました',
+    translateTo: '翻訳先',
+    translationChangeFailed: '言語を変更できませんでした。もう一度選択してください。',
     translating: '翻訳中',
     liveTranslationTag: 'EN',
     selectionPolish: {
@@ -338,6 +342,12 @@ export const ja: typeof zhCN = {
     cancel: 'キャンセル',
   },
   qa: {
+    activity: {
+      searchingWeb: 'ウェブを検索中',
+      readingWeb: 'ウェブページを読込中',
+      usingTool: '{{tool}} を使用中',
+      tool: 'ツール',
+    },
     compact: {
       closeError: '閉じられませんでした。再試行してください。',
       sendError: '送信できませんでした。入力は保持されています。再試行してください。',
@@ -491,7 +501,7 @@ export const ja: typeof zhCN = {
     style: 'スタイル',
     marketplace: 'マーケット',
     translation: '翻訳',
-    selectionAsk: '選択追問',
+    selectionAsk: '何でも質問',
     quickNote: '速記',
     corrections: '修正ルール',
     polishMode: '推敲モード',
@@ -1191,8 +1201,22 @@ export const ja: typeof zhCN = {
       fallbackDesc: '翻訳失敗時は原文がそのまま挿入されます。',
     },
   },
+  askAnything: {
+    dictation: '音声入力',
+    translation: '翻訳',
+    question: '何でも質問',
+    dictationHint: '話した内容を文字にする',
+    translationHint: '録音中に翻訳先を選択',
+    questionHint: '文字を選択するか、そのまま質問',
+    description:
+      '組み合わせを押して質問し、もう一度押すと送信します。回答は画面下部に表示されます。',
+    auxiliaryKey: '質問の追加キー',
+    auxiliaryHint: '{{key}} と一緒に押します。録音キーの変更に追従します。',
+    selectionHint:
+      '選択した文字を質問の文脈に使います。選択は任意です。毎回、新しい質問を開始します。',
+  },
   selectionAsk: {
-    title: '選択追問',
+    title: '何でも質問',
     desc: 'テキストを選択して音声で質問。複数ターンの追問対応。',
     shortcutSettings: 'ショートカット設定',
     guide: {
@@ -1320,6 +1344,16 @@ export const ja: typeof zhCN = {
       cursorContextLabel: 'カーソル文脈（実験的）',
       cursorContextDesc:
         '推敲時にカーソル付近の短い文章を参考情報としてモデルへ送信し、固有名詞・同音語・指示語の判断に使います（macOS / Windows / Android）。音声入力、クイックメモ、クラウドメモのいずれも参照しますが、コンテキスト自体がメモ・履歴・ログに書き込まれることはありません。クラウドモデル使用時は、推敲リクエストとともにそのプロバイダーへ送信されます。端末内の単語学習とは独立した設定です。パスワード欄、ターミナル、既知の機密アプリは除外します。',
+    },
+    localMigration: {
+      title: 'ローカル設定の移行',
+      description:
+        '移行可能なローカル設定をバージョン付きバンドルに書き出すか、別の Android 端末に復元します。共有モードはデフォルトで匿名化され、個人移行で認証情報を含める場合はパスワード保護が必要です。ネイティブ画面で統合または置換の前に、出所、バージョン、カテゴリ、変更内容を確認できます。',
+      safetyNote:
+        'システム権限、OAuth セッション、端末パス、実行時状態は移行されません。インポート前にローカルバックアップを作成します。',
+      open: 'ローカル移行を開く',
+      opening: '開いています…',
+      openFailed: 'ローカル移行を開けませんでした。設定からもう一度お試しください。',
     },
     codingConsole: {
       title: 'Claude コンソール',
@@ -1476,7 +1510,6 @@ export const ja: typeof zhCN = {
       microphoneMonitorError: '入力レベルの監視に失敗：{{message}}',
       capsuleLabel: '録音カプセル',
       capsuleDesc: '録音 / 転写中、画面下部に半透明のカプセルを表示。',
-      capsuleStyleTypeless: 'Typeless コンパクトスタイル',
       capsuleTranscriptLabel: '文字起こしをリアルタイム表示',
       capsuleTranscriptDesc:
         '音声バーの代わりに認識した原文を表示します。オフにすると元の表示に戻ります。非ストリーミング認識は結果の受信後に表示します。',
@@ -1488,18 +1521,56 @@ export const ja: typeof zhCN = {
         '「マルチモーダルモード」で、チャネルが Bailian（dashscope-omni）の場合に利用できます。',
       liveTranslationPreviewUnavailableStreaming:
         '現在の認識機能がすでにリアルタイム原文を表示しているため、このプレビューは有効になりません。',
+      capsuleDisplayModeLabel: '複数画面のカプセル',
+      capsuleDisplayModeDesc:
+        '録音カプセルを表示する画面を選択します。すべての画面ではウィンドウと描画リソースの使用量が増えます。',
+      capsuleDisplayCursorScreen: 'マウスポインターのある画面',
+      capsuleDisplayPrimaryScreen: 'メインディスプレイのみ',
+      capsuleDisplayForegroundWindowScreen: '前面ウィンドウのある画面',
+      capsuleDisplayAllScreens: 'すべての画面に表示',
+      capsuleDisplayModeRestartTitle: '表示モードを適用するには OpenLess を再起動してください',
+      capsuleDisplayModeRestartDesc:
+        'すべての画面表示から切り替えるには、以前のカプセルウィンドウを閉じるため再起動が必要です。今すぐ再起動しますか？',
       capsuleStyleLabel: 'カプセルスタイル',
       capsuleStyleSiri: '光条 Siri スタイル',
-      capsuleStyleClassic: 'Openless デフォルトスタイル',
+      capsuleStyleClassic: 'OpenLess デフォルトスタイル',
       stableTranscriptionLabel: '安定モード（録音後に文字起こし）',
       stableTranscriptionDesc:
         '有効にすると、録音中は ASR に接続せず、停止後に音声全体を送信します。結果は遅くなりますが、接続遅延や録音中のネットワーク変動に録音が影響されません。',
       lowLatencyDictationLabel: '低遅延キャプチャ',
       lowLatencyDictationDesc:
         'マイクストリームを準備し、最大 500 ミリ秒をメモリに保持して、ホットキー直後の音声が欠落しにくくします。録音を確定するまで音声は保存・アップロードされません。電力を多く使い、マイク使用中の表示が続きます。',
-      audioEnhancementLabel: '軽量マイク拡張',
+      dsp: {
+        noise: 'Noise reduction',
+        dereverb: 'Comb filter',
+        equalizer: 'Equalizer',
+        gain: 'Input gain',
+        agc: 'Automatic gain',
+        vad: 'Speech gate',
+        title: 'Speech enhancement settings',
+        description:
+          'RNNoise is lightweight; PureVox offers model-based noise reduction with higher CPU use. Changes apply to the next recording.',
+        off: 'Off',
+        spectral: 'Spectral subtraction',
+        strength: 'Noise reduction strength',
+        target: 'Target level',
+        attack: 'Attack speed',
+        decay: 'Release speed',
+        vadHint:
+          'Attenuates quiet passages; it does not stop recording. A high threshold can remove quiet speech.',
+        threshold: 'Speech gate threshold',
+        tone: 'Tone and room adjustments',
+        combHint:
+          'The comb filter follows MicYou’s simple delay subtraction. It can color speech; start at 0%.',
+        preamp: 'Equalizer preamp',
+        order: 'Processing order',
+        up: 'Move up',
+        down: 'Move down',
+        reset: 'Reset enhancement settings',
+      },
+      audioEnhancementLabel: '音声強調',
       audioEnhancementDesc:
-        'ローカルマイクに軽いノイズ抑制、ゲイン、ソフトリミッターを適用します。エコーキャンセルは含みません。既定ではオフです。',
+        'RNNoise または PureVox のノイズ抑制、自動ゲイン、リミッターを適用します。既定ではオフ。変更は次の録音から有効です。',
       muteDuringRecordingLabel: '録音中はミュート',
       muteDuringRecordingDesc:
         '録音中にシステム出力を一時的にミュートし、スピーカーのエコーを防ぎます。',
@@ -1517,6 +1588,9 @@ export const ja: typeof zhCN = {
       pasteShortcutCtrlV: 'Ctrl+V（既定 / ほとんどのアプリ）',
       pasteShortcutCtrlShiftV: 'Ctrl+Shift+V（kitty / alacritty / wezterm / ほとんどのターミナル）',
       pasteShortcutShiftInsert: 'Shift+Insert（xterm / urxvt）',
+      plainTextInsertionLabel: 'プレーンテキスト挿入モード',
+      plainTextInsertionDesc:
+        'オンにすると、模擬貼り付けは Ctrl+V の代わりに Shift+Insert を使います（オン中は上のショートカットを変更できません）。極めて特殊な場合にのみオンにしてください（例：Punto Switcher などのキーボード配列切替ツールが Ctrl+V を奪う場合）。クリップボード貼り付け方式にのみ適用されます（Windows のみ）。',
       comboRecordLabel: 'ショートカットを記録',
       comboRecordDesc:
         'クリック後、希望するキーの組み合わせ（例：⌘⇧D）を押してください。トグル / 押し続けの両方に対応。',
@@ -1575,7 +1649,31 @@ export const ja: typeof zhCN = {
       recordAudioForDebugDesc: '生のマイク音声を wav で保存し、認識問題の診断に利用。',
       audioRecordingMaxEntriesLabel: '元音声の保持件数',
       audioRecordingMaxEntriesDesc: 'ローカル保持 wav ファイル上限。空欄 = 200。',
+      voiceActivationLabel: '音声アクティベーション',
+      voiceActivationDesc: '起動フレーズをローカルで待ち受けて音声入力を開始します。',
+      voiceActivationLocalOnly:
+        '認識はこの端末内で行われます。待機中の音声は送信・保存されません。',
+      voiceActivationMultimodalModels:
+        'ここで音声起動用モデルを準備します。音声入力には引き続き現在のマルチモーダルサービスを使用します。',
+      voiceActivationModelMissing: 'ローカル Zipformer モデルがインストールされていません。',
+      voiceActivationDownloadZipformer: 'Zipformer をダウンロード',
+      voiceActivationWakeEnabled: '起動フレーズ',
+      voiceActivationWakePhrase: '起動フレーズ',
+      voiceActivationFinishEnabled: '終了フレーズ',
+      voiceActivationFinishPhrase: '終了フレーズ',
+      voiceActivationTimeoutEnabled: 'タイムアウトで停止',
+      voiceActivationTimeoutSeconds: 'タイムアウト（秒）',
       startupGroupTitle: '起動',
+      lowMemoryBackgroundLabel: '省メモリバックグラウンドモード',
+      lowMemoryBackgroundDesc:
+        '再起動後に適用。メイン画面を閉じると解放し、録音時のみネイティブカプセルを表示します。待機中のマイク事前起動を無効にします。ローカルモデルの解放設定は維持されます。',
+      lowMemoryRestartLabel: '再起動後に適用',
+      lowMemoryRestartDesc:
+        '低メモリバックグラウンドモードの設定を保存しました。実行モードの切り替えにはアプリの再起動が必要です。',
+      lowMemoryRestartNow: '今すぐ再起動',
+      lowMemoryCapsuleErrorLabel: 'ネイティブカプセル利用不可',
+      lowMemoryCapsuleErrorDesc:
+        'ディクテーションは引き続き利用できますが、フローティングカプセルは表示されません。ヘルパーが見つからないかブロックされている可能性があります。アプリを再インストールしてください。',
       startMinimizedLabel: '起動時にメインウィンドウを表示しない',
       startMinimizedDesc:
         'どの起動経路でもメインウィンドウを開かず、メニューバー / トレイのみで動作。',
@@ -1692,6 +1790,7 @@ export const ja: typeof zhCN = {
         openai: 'OpenAI',
         gemini: 'Google Gemini',
         codexOAuth: 'Codex OAuth',
+        chatgptSiwc: 'ChatGPT Plan',
         mimo: 'Xiaomi MiMo',
         cometapi: 'CometAPI',
         openrouterFree: 'OpenRouter（無料モデル）',
@@ -1741,9 +1840,9 @@ export const ja: typeof zhCN = {
         omniDashscope: 'Alibaba DashScope Omni',
       },
       geminiTranscribeNotice:
-        'ここでは gemini-3.5-transcribe で逐語的に文字起こしし、設定済みの LLM で処理します。スマート文字起こしには、マルチモーダルモードでこのモデルを選択してください。録音終了後にアップロードします。リアルタイムには未対応です。ベース URL：https://generativelanguage.googleapis.com/v1beta（/v1beta/interactions も使用可能）。',
+        'どちらのモデルもここでは逐語的に文字起こしし、必要に応じて設定済みの LLM で処理できます。gemini-3.5-transcribe は録音終了後に音声をアップロードします。gemini-3.5-transcribe-live は話している間に結果を表示し、1 回の録音は最大 10 分です。スマート文字起こしにはマルチモーダルモードを使用してください。ベース URL：https://generativelanguage.googleapis.com/v1beta。',
       geminiTranscribeOmniNotice:
-        'gemini-3.5-transcribe はスマート文字起こしに対応し、録音終了後にフィラーの除去、言い直しの反映、文章の整形を行います。作業言語と辞書を利用できます。スタイルプロンプト、翻訳、テキスト校正、質問応答には対応しません。これらには従来モードと LLM を使用してください。',
+        'gemini-3.5-transcribe と gemini-3.5-transcribe-live はスマート文字起こしに対応します。Live は話している間に下書きを表示し、1 回の録音は最大 10 分です。録音終了後にフィラーの除去、言い直しの反映、最終テキストの整形を行います。両モデルとも作業言語と辞書を利用できますが、スタイルプロンプト、翻訳、テキスト校正、質問応答には対応しません。これらには従来モードと LLM を使用してください。',
       validateSuccessAudio:
         '短い無音データで音声接続を確認しました。短い録音で文字起こしの品質も確認してください。',
       elevenLabsUploadNotice:
@@ -1776,8 +1875,9 @@ export const ja: typeof zhCN = {
       volcengineAuthModeApiKey: '新版コンソール API Key',
       volcengineMappingNote:
         'Secret Key は現在不要。Resource ID のデフォルトは volc.seedasr.sauc.duration。',
-      volcengineApiKeyNote:
-        '新版スピーチコンソールで作成した API Key で認証します（APP ID 不要）。API Key はスピーチコンソールの「API Key 管理」で作成：console.volcengine.com/speech/new/setting/apikeys。Resource ID のデフォルトは volc.seedasr.sauc.duration。',
+      volcengineApiKeyConsole: 'Doubao Speech · API Key 管理',
+      volcengineApiKeyNote: 'ここで作成した音声用 API Key で認証。Ark のキーは使えません。',
+      volcengineResourceIdNote: 'Resource ID のデフォルトは {{resourceId}} です。',
       xfyunAppIdLabel: 'AppID',
       xfyunApiKeyLabel: 'API Key',
       xfyunNote:
@@ -2085,11 +2185,13 @@ export const ja: typeof zhCN = {
         background: 'バックグラウンド',
         keyboard: 'キーボード表示時',
         always: '常時',
+        never: '表示しない',
       },
       androidOverlayTriggerHint: {
         background: 'シンプル',
         keyboard: 'このモードは保留中です。既存設定はバックグラウンドに戻します。',
         always: '常に表示',
+        never: '自動表示しません。キーボードは引き続き使用できます。',
       },
       androidOverlayTriggerDisabled: {
         keyboard:
@@ -2161,12 +2263,18 @@ export const ja: typeof zhCN = {
         'SendInput Unicode で TSF / IME を迂回。入力ソースの切替は不要です。',
       streamingInsertHintLinux:
         'fcitx5 プラグインで文字を送信。ストリーミング入力は enigo + XTest でキー合成。',
+      windowsCompositionInputLabel: 'リアルタイム原文を入力欄に表示（Windows）',
+      windowsCompositionInputDesc:
+        '録音中、認識された文字を下線付きの変換中テキストとして入力欄に表示し、終了時に最終結果に置き換えます。OpenLess の TSF 入力コンポーネントと、テキストサービスフレームワーク（TSF）に対応したアプリが必要です。',
       streamingInsertSaveClipboardLabel: 'クリップボードに保存',
       streamingInsertSaveClipboardHint:
         '挿入成功後に最終テキストをクリップボードへ書き込み、Cmd+V で再貼付け可能にします。OFF ではクリップボードに触れません。',
       localAsrTitle: 'ローカル ASR モデル',
       localAsrDesc: '転写をクラウドから本機推論に切り替えます。オフライン／プライバシー重視向け。',
       localAsrWarningShort: 'ローカル推論は遅く、スペック不足では欠字の可能性があります。',
+      localAsrFallbackLabel: 'クラウド認識に失敗したらローカルモデルを使う',
+      localAsrFallbackDesc:
+        '通信が不安定、またはオフラインのとき、クラウドの再試行を待たずにダウンロード済みのローカルモデルで録音を認識します。ローカルモデルのダウンロードが必要です。',
       qwen3Desc: '有効化すると ASR プロバイダーが引き継がれます。',
       sherpaDesc: '有効化すると ASR プロバイダーが引き継がれます。',
       foundryDesc: '有効化すると ASR プロバイダーが引き継がれます。',

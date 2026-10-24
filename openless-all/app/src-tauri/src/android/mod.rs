@@ -7,6 +7,8 @@ pub mod edit_observation;
 pub mod insert;
 pub mod insert_tiers;
 pub mod jni;
+#[cfg(target_os = "android")]
+pub(crate) mod local_migration;
 pub mod native_bridge;
 pub mod overlay;
 pub mod shizuku;
@@ -39,3 +41,25 @@ pub use shizuku::{
     recover_android_accessibility, request_android_shizuku_permission, AndroidShizukuOpenResult,
     AndroidShizukuPermissionResult,
 };
+
+#[cfg(target_os = "android")]
+pub fn siwc_authorization_lease(acquire: bool) -> Result<(), String> {
+    jni::android::with_android_env(|env, context| {
+        let result = jni::android::call_static_void_with_context_class(
+            env,
+            context,
+            "com.openless.app.OpenLessRuntimeService",
+            if acquire {
+                "acquireAuthorization"
+            } else {
+                "releaseAuthorization"
+            },
+            "(Landroid/content/Context;)V",
+            &[::jni::objects::JValue::Object(context)],
+        );
+        if result.is_err() {
+            let _ = env.exception_clear();
+        }
+        result
+    })
+}

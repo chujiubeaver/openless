@@ -9,6 +9,7 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import vm from 'node:vm';
 
 const scriptPath = resolve(dirname(fileURLToPath(import.meta.url)), 'ci-changed-areas.sh');
 const git = (cwd, args) =>
@@ -60,6 +61,7 @@ try {
   check('docs only: tauri', decide('tauri'), 'false');
   check('docs only: msrv', decide('msrv'), 'false');
   check('docs only: linux', decide('linux'), 'false');
+  check('docs only: harmony', decide('harmony'), 'false');
   reset();
 
   // The Linux host is a separate crate: only its own Rust sources stay in.
@@ -67,6 +69,17 @@ try {
   check('linux host source: tauri', decide('tauri'), 'false');
   check('linux host source: msrv', decide('msrv'), 'true');
   check('linux host source: linux', decide('linux'), 'true');
+  check('linux host source: harmony', decide('harmony'), 'false');
+  reset();
+
+  // HarmonyOS work touches the shared bundle and the Rust host, never the Linux
+  // package chain or the Tauri desktop build.
+  commit(
+    { 'openless-all/app/harmony/entry/src/main/ets/pages/Index.ets': 'export {};\n' },
+    'arkts',
+  );
+  check('arkts source: harmony', decide('harmony'), 'true');
+  check('arkts source: tauri', decide('tauri'), 'true');
   reset();
 
   // ...but its manifest moves the shared workspace dependency graph.
@@ -84,6 +97,7 @@ try {
   check('frontend only: tauri', decide('tauri'), 'true');
   check('frontend only: msrv', decide('msrv'), 'false');
   check('frontend only: linux', decide('linux'), 'true');
+  check('frontend only: harmony', decide('harmony'), 'true');
   reset();
 
   // Native code keeps every check on.
@@ -103,15 +117,18 @@ try {
   check('workflow change: tauri', decide('tauri'), 'true');
   check('workflow change: msrv', decide('msrv'), 'true');
   check('workflow change: linux', decide('linux'), 'true');
+  check('workflow change: harmony', decide('harmony'), 'true');
   reset();
 
   // Unreadable or empty change sets never skip a platform check.
   check('no base revision: tauri', decide('tauri', null), 'true');
   check('no base revision: msrv', decide('msrv', null), 'true');
   check('no base revision: linux', decide('linux', null), 'true');
+  check('no base revision: harmony', decide('harmony', null), 'true');
   check('empty diff: tauri', decide('tauri'), 'true');
   check('empty diff: msrv', decide('msrv'), 'true');
   check('empty diff: linux', decide('linux'), 'true');
+  check('empty diff: harmony', decide('harmony'), 'true');
   check('unknown revision: tauri', decide('tauri', 'deadbeefdeadbeef'), 'true');
   check('unknown area', decide('nonsense'), 'true');
 } finally {
@@ -135,7 +152,7 @@ const reusable = readFileSync(
   ),
   'utf8',
 );
-const areas = ['tauri', 'msrv', 'linux'];
+const areas = ['tauri', 'msrv', 'linux', 'harmony'];
 check(
   'workflow publishes every area',
   areas.every((area) => workflow.includes(area + ': ${{ steps.detect.outputs.' + area + ' }}')),
@@ -143,7 +160,7 @@ check(
 );
 check(
   'workflow computes every area in the detect step',
-  /for area in tauri msrv linux; do/.test(workflow),
+  /for area in tauri msrv linux harmony; do/.test(workflow),
   true,
 );
 check(
@@ -156,9 +173,45 @@ check(
   workflow.includes("if: needs.changes.outputs.msrv != 'false'"),
   true,
 );
+// Native changes must exercise the pinned minimum compiler on every platform.
+check(
+  'macos msrv is not skipped when stable has the same version',
+  workflow.includes("if: needs.changes.outputs.msrv != 'false' &&"),
+  false,
+);
+check(
+  'changes job publishes the native-source gate for pinned toolchains',
+  workflow.includes('msrv_needed: ${{ steps.detect.outputs.msrv }}'),
+  true,
+);
+// The secondary platform uses the same native-source gate.
+check(
+  'windows msrv steps follow the source gate',
+  workflow.includes("if: runner.os == 'Windows' && needs.changes.outputs.msrv_needed == 'true'"),
+  true,
+);
+// `cargo check` immediately followed by `cargo test --no-run` compiles the graph
+// twice; the no-run pass now covers bins itself.
+check(
+  'windows has one codegen pass, not check plus no-run',
+  !/run: cargo check --locked --manifest-path src-tauri\/Cargo\.toml$/m.test(workflow),
+  true,
+);
+check(
+  'windows codegen pass covers lib and bins',
+  workflow.includes(
+    'cargo test --locked --manifest-path src-tauri/Cargo.toml --lib --bins --no-run',
+  ),
+  true,
+);
 check(
   'android gate is fail-open',
   /inputs\.platform != 'macos'\) && needs\.changes\.outputs\.tauri != 'false'/.test(workflow),
+  true,
+);
+check(
+  'harmony gate is fail-open',
+  workflow.includes("needs.changes.outputs.harmony != 'false'"),
   true,
 );
 check(
@@ -176,6 +229,108 @@ check(
   (reusable.match(/if: inputs\.scope != 'none'/g) ?? []).length >= 10,
   true,
 );
+
+// Wall-clock guards: the Windows runner is the slowest one, so the frontend
+// suite must not serialise behind the Rust compile, and the Linux tests must not
+// serialise in front of the deb/rpm build.
+check(
+  'windows frontend runs in its own job',
+  /  windows-frontend:[\s\S]*?runs-on: windows-latest/.test(workflow),
+  true,
+);
+check(
+  'windows only runs the platform-sensitive contracts',
+  workflow.includes('--platform-only windows'),
+  true,
+);
+check(
+  'macOS still runs the full contract suite',
+  /if: runner\.os == 'macOS'\n\s+run: npm test/.test(workflow),
+  true,
+);
+
+// `tauri::generate_context!()` embeds ../dist at compile time, so any job that
+// compiles the Tauri lib must build the frontend first — including the matrix
+// job on Windows, where the contract suite moved to its own job.
+check(
+  'windows builds the frontend before compiling the Tauri lib',
+  /if: runner\.os == 'Windows'\n\s+run: npm run build/.test(workflow),
+  true,
+);
+
+const windowsJob = workflow.match(/\n  windows-frontend:[\s\S]*?(?=\n  [a-z-]+:)/)?.[0] ?? '';
+const capsuleJob = workflow.match(/\n  native-capsule:[\s\S]*?(?=\n  [a-z-]+:)/)?.[0] ?? '';
+const windowsGate = windowsJob.match(/\n    if: (.+)/)?.[1];
+const capsuleMatrix = capsuleJob.match(/\n        os: \$\{\{ (.+) \}\}/)?.[1];
+for (const [event, platform, tauri, expectedWindows, expectedPlatforms] of [
+  ['workflow_dispatch', 'macos', 'true', false, ['macos-latest']],
+  ['workflow_dispatch', 'all', 'true', true, ['macos-latest', 'windows-latest']],
+  ['pull_request', '', 'true', true, ['macos-latest', 'windows-latest']],
+  ['push', '', undefined, true, ['macos-latest', 'windows-latest']],
+  ['pull_request', '', 'false', false, ['macos-latest', 'windows-latest']],
+]) {
+  const context = {
+    github: { event_name: event },
+    inputs: { platform },
+    needs: { changes: { outputs: { tauri } } },
+    fromJSON: JSON.parse,
+  };
+  check(
+    event + '/' + platform + ': Windows frontend gate',
+    Boolean(vm.runInNewContext(windowsGate ?? 'false', context)),
+    expectedWindows,
+  );
+  check(
+    event + '/' + platform + ': capsule platforms',
+    JSON.stringify(vm.runInNewContext(capsuleMatrix ?? '[]', context)),
+    JSON.stringify(expectedPlatforms),
+  );
+}
+
+// Execute the real wiring checks with changed text, without spawning Git again.
+const source = readFileSync(fileURLToPath(import.meta.url), 'utf8');
+const wiringStart = source.indexOf('const areas =');
+const wiringEnd = source.indexOf('// Execute the real wiring checks');
+const failureStart = source.lastIndexOf('\nif (failures > 0) {');
+const wiring = source.slice(wiringStart, wiringEnd) + source.slice(failureStart);
+for (const [label, changed] of [
+  [
+    'missing Windows frontend build',
+    workflow.replace(
+      /if: runner\.os == 'Windows'\n\s+run: npm run build/,
+      "if: runner.os == 'Never'\n        run: npm run build",
+    ),
+  ],
+  [
+    'missing separate frontend job',
+    workflow.replace('\n  windows-frontend:', '\n  removed-frontend:'),
+  ],
+]) {
+  check(label + ': mutation applied', changed !== workflow, true);
+  let exitCode = 0;
+  try {
+    vm.runInNewContext(
+      'let failures = 0; const check = (label, actual, expected) => { if (actual !== expected) failures++; }; ' +
+        wiring,
+      {
+        workflow: changed,
+        reusable,
+        vm,
+        check: undefined,
+        console: { log() {}, error() {} },
+        process: {
+          exit(code) {
+            exitCode = code;
+            throw new Error('expected contract failure');
+          },
+        },
+      },
+    );
+  } catch (error) {
+    if (!exitCode) throw error;
+  }
+  check(label + ': contract rejects the mutation', exitCode, 1);
+}
 
 if (failures > 0) {
   console.error(`ci-changed-areas contract test failed (${failures})`);

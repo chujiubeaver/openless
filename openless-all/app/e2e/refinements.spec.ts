@@ -38,6 +38,8 @@ test('shortcut search and categories live in the flat settings pane; keyboard cl
 test('native scrolling has no JS wheel interception and is stable when stopped', async ({
   page,
 }) => {
+  // The wheel distance is asserted in CSS pixels, which match device pixels only at 100%.
+  await page.addInitScript(() => localStorage.setItem('ol-font-scale', 'medium'));
   await openShortcuts(page);
   const content = page.locator('.ol-settings-scroll');
   await expect(content).toHaveCSS('scroll-behavior', 'auto');
@@ -162,7 +164,7 @@ test('every main destination and settings category stays readable on desktop and
     await expect(page.locator('main h1')).toBeVisible();
   }
   await page.getByRole('button', { name: '工具', exact: true }).click();
-  for (const name of ['翻译', '划词追问', '速记', '纠正规则']) {
+  for (const name of ['翻译', '问任何问题', '速记', '纠正规则']) {
     await page.getByRole('button', { name, exact: true }).click();
     await expect(page.locator('main h1')).toBeVisible();
   }
@@ -274,17 +276,27 @@ test('text height grows with contents and chips give the selection actual layout
   await page.getByRole('button', { name: '展开全文' }).click();
   await expect(page.getByRole('button', { name: '收起' })).toHaveAttribute('aria-expanded', 'true');
   await expect.poll(async () => (await clip.boundingBox())!.height).toBeGreaterThan(initial * 3);
-  const before = (await page.getByRole('button', { name: 'Three', exact: true }).boundingBox())!;
+  // This assertion concerns layout space, not the temporary FLIP/scale
+  // transforms applied by Framer Motion (which WebKit samples fractionally).
+  const before = await page
+    .getByRole('button', { name: 'Three', exact: true })
+    .evaluate((el) => (el as HTMLElement).offsetLeft);
   await page.getByRole('button', { name: 'Two', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Two', exact: true })).toHaveAttribute(
     'aria-pressed',
     'true',
   );
-  await page.waitForTimeout(350);
-  const selected = await page.getByRole('button', { name: 'Two', exact: true }).boundingBox();
-  const last = await page.getByRole('button', { name: 'Three', exact: true }).boundingBox();
-  expect(selected!.x + selected!.width).toBeLessThan(last!.x);
-  expect(last!.x).toBeGreaterThanOrEqual(before.x - 1);
+  const selected = await page
+    .getByRole('button', { name: 'Two', exact: true })
+    .evaluate((el) => ({
+      x: (el as HTMLElement).offsetLeft,
+      width: (el as HTMLElement).offsetWidth,
+    }));
+  const last = await page
+    .getByRole('button', { name: 'Three', exact: true })
+    .evaluate((el) => (el as HTMLElement).offsetLeft);
+  expect(selected.x + selected.width).toBeLessThan(last);
+  expect(last).toBeGreaterThanOrEqual(before - 1);
 });
 
 test('swipe departure is directional, removable and undoable', async ({ page }) => {

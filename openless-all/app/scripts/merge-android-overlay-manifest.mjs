@@ -14,6 +14,8 @@ const PERMISSIONS = [
   'android.permission.FOREGROUND_SERVICE_SPECIAL_USE',
   'android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS',
   'android.permission.POST_NOTIFICATIONS',
+  // The keyboard's status dot shows pure-local raw output while offline.
+  'android.permission.ACCESS_NETWORK_STATE',
 ];
 
 const APPLICATION_SNIPPET = `
@@ -32,7 +34,7 @@ const SERVICE_SNIPPETS = [
             android:foregroundServiceType="specialUse">
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                android:value="ime_runtime" />
+                android:value="Keeps the IME runtime and user-initiated ChatGPT authorization callback available while the user is in another app." />
         </service>`,
   `<service
             android:name=".OpenLessImeService"
@@ -83,6 +85,11 @@ const SERVICE_SNIPPETS = [
   // startActivity(OpenLessKeyboardSettingsActivity) fails with ActivityNotFound.
   `<activity
             android:name=".OpenLessKeyboardSettingsActivity"
+            android:exported="false"
+            android:windowSoftInputMode="adjustResize"
+            android:theme="@style/Theme.openless" />`,
+  `<activity
+            android:name=".OpenLessLocalMigrationActivity"
             android:exported="false"
             android:windowSoftInputMode="adjustResize"
             android:theme="@style/Theme.openless" />`,
@@ -173,6 +180,18 @@ function mergeApplicationChildren(manifestXml) {
   return { content, changed };
 }
 
+function updateRuntimeServicePurpose(manifestXml) {
+  const content = manifestXml.replace(
+    /<service\b[^>]*android:name="\.OpenLessRuntimeService"[\s\S]*?<\/service>/g,
+    (block) =>
+      block.replace(
+        'android:value="ime_runtime"',
+        'android:value="Keeps the IME runtime and user-initiated ChatGPT authorization callback available while the user is in another app."',
+      ),
+  );
+  return { content, changed: content !== manifestXml };
+}
+
 /** Move only the launcher filter, including repair of previously generated manifests. */
 function moveLauncherIntentFilterToWarmupActivity(manifestXml) {
   const activities = /<activity\b([^>]*?)(?:\/>|>([\s\S]*?)<\/activity>)/g;
@@ -222,6 +241,7 @@ function main() {
     mergePermissions,
     ensureApplicationName,
     mergeApplicationChildren,
+    updateRuntimeServicePurpose,
     moveLauncherIntentFilterToWarmupActivity,
   ]) {
     const result = step(content);

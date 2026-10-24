@@ -1,25 +1,27 @@
-//! Windows: show the recording capsule on every monitor at once (issue #1057).
+//! Native capsule display policy: follow the pointer by default, select the primary or
+//! foreground-window display when requested, and mirror only when the user explicitly chooses
+//! all attached displays.
 //!
 //! The primary `capsule` / `capsule-rail` windows stay the source of truth: they own the
-//! card modes, the layout cache and the event routing. Every other monitor gets a mirror
-//! pair `capsule-mirror-<n>` / `capsule-rail-mirror-<n>` that loads the same frontend route
-//! and receives the same state events. Mirrors are created lazily, reused, and hidden when
-//! the capsule is not visible.
+//! card modes, the layout cache and the event routing. Legacy mirror labels are kept
+//! for opt-in mirrors; cursor-only mode creates no additional windows.
 //!
 //! Pure placement / topology helpers in this module are platform-agnostic and unit-tested
-//! on every CI host. Window creation stays Windows-only.
+//! on every CI host. Native mirror creation supports macOS and Windows.
 
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
-#[cfg(target_os = "windows")]
-use tauri::{AppHandle, Manager, Monitor, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
+use crate::types::CapsuleDisplayMode;
+#[cfg(not(mobile))]
+use tauri::Monitor;
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 
 pub(crate) const CAPSULE_MIRROR_PREFIX: &str = "capsule-mirror-";
 pub(crate) const RAIL_MIRROR_PREFIX: &str = "capsule-rail-mirror-";
 
-/// Upper bound on mirrored monitors (the primary monitor is not mirrored, so 8 displays
-/// are covered in total). Capability globs cover these labels.
+/// Legacy slot count used to hide any previously created mirror windows.
 pub(crate) const MAX_CAPSULE_MIRRORS: usize = 7;
 
 /// Physical description of one monitor in virtual-desktop coordinates.
@@ -35,10 +37,30 @@ pub(crate) struct MonitorRect {
     pub(crate) work_bottom: i32,
     /// Effective DPI scale (1.0 = 96 dpi).
     pub(crate) scale: f64,
+    /// Stable Tauri monitor name hash, when the runtime exposes one.
+    /// A zero value means that only the outer bounds can identify the monitor.
+    pub(crate) identity: u64,
+}
+
+#[cfg(not(mobile))]
+fn monitor_identity(name: Option<&String>) -> u64 {
+    let Some(name) = name else {
+        return 0;
+    };
+    let mut hash = 0xcbf29ce484222325u64;
+    for byte in name.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    if hash == 0 {
+        1
+    } else {
+        hash
+    }
 }
 
 impl MonitorRect {
-    #[cfg(target_os = "windows")]
+    #[cfg(not(mobile))]
     pub(crate) fn from_tauri(monitor: &Monitor) -> Self {
         let position = monitor.position();
         let size = monitor.size();
@@ -57,32 +79,63 @@ impl MonitorRect {
             work_right: work_left + work.size.width as i32,
             work_bottom: work_top + work.size.height as i32,
             scale: monitor.scale_factor().max(0.1),
+            identity: monitor_identity(monitor.name()),
         }
     }
 
     /// Work area (taskbar excluded), falling back to the full monitor when the OS reports none.
     fn work_rect(&self) -> (i32, i32, i32, i32) {
         if self.work_right > self.work_left && self.work_bottom > self.work_top {
-            (self.work_left, self.work_top, self.work_right, self.work_bottom)
+            (
+                self.work_left,
+                self.work_top,
+                self.work_right,
+                self.work_bottom,
+            )
         } else {
             (self.left, self.top, self.right, self.bottom)
         }
     }
+}
 
-    fn is_same_monitor(&self, other: &Self) -> bool {
-        self.left == other.left
-            && self.top == other.top
-            && self.right == other.right
-            && self.bottom == other.bottom
+/// Follow the mouse, not the capsule HWND (which can still be on the old screen).
+/// Fall back to the primary display if the cursor cannot be queried.
+#[cfg(target_os = "windows")]
+pub(crate) fn target_monitor_rect<R: tauri::Runtime>(
+    window: &WebviewWindow<R>,
+) -> Option<MonitorRect> {
+    target_monitor_rect_for_mode(window, CapsuleDisplayMode::CursorScreen, None)
+}
+
+#[cfg(target_os = "windows")]
+pub(crate) fn target_monitor_rect_for_mode<R: tauri::Runtime>(
+    window: &WebviewWindow<R>,
+    mode: CapsuleDisplayMode,
+    frozen: Option<MonitorRect>,
+) -> Option<MonitorRect> {
+    let monitors = all_monitor_rects(window);
+    let primary = primary_monitor_rect(window);
+    match mode {
+        CapsuleDisplayMode::PrimaryScreen => primary.or_else(|| monitors.first().copied()),
+        CapsuleDisplayMode::ForegroundWindowScreen => {
+            resolve_frozen_monitor(frozen, &monitors, primary)
+        }
+        CapsuleDisplayMode::CursorScreen | CapsuleDisplayMode::AllScreens => {
+            let mut point = windows::Win32::Foundation::POINT::default();
+            // SAFETY: GetCursorPos writes only to this initialized POINT.
+            if unsafe { windows::Win32::UI::WindowsAndMessaging::GetCursorPos(&mut point) }.is_ok()
+            {
+                if let Some(monitor) = monitor_at_point(&monitors, point.x, point.y) {
+                    return Some(monitor);
+                }
+            }
+            primary.or_else(|| monitors.first().copied())
+        }
     }
 }
 
-/// The OS primary monitor, where the primary capsule lives. Stable across foreground changes,
-/// unlike the old "monitor of the focused window" placement.
 #[cfg(target_os = "windows")]
-pub(crate) fn primary_monitor_rect<R: tauri::Runtime>(
-    window: &WebviewWindow<R>,
-) -> Option<MonitorRect> {
+fn primary_monitor_rect<R: tauri::Runtime>(window: &WebviewWindow<R>) -> Option<MonitorRect> {
     window
         .primary_monitor()
         .ok()
@@ -90,8 +143,107 @@ pub(crate) fn primary_monitor_rect<R: tauri::Runtime>(
         .map(|monitor| MonitorRect::from_tauri(&monitor))
 }
 
-/// Every monitor currently connected, in the OS enumeration order.
+/// Resolve a monitor captured at session start against the current topology.
+/// Returning the current rect preserves updated work-area/DPI data while the stable monitor name
+/// (when available) or outer bounds identify the same display. A disconnected target falls back to
+/// the current primary display.
+pub(crate) fn resolve_frozen_monitor(
+    frozen: Option<MonitorRect>,
+    monitors: &[MonitorRect],
+    primary: Option<MonitorRect>,
+) -> Option<MonitorRect> {
+    if let Some(frozen) = frozen {
+        if let Some(current) = monitors.iter().copied().find(|monitor| {
+            if frozen.identity != 0 && monitor.identity != 0 {
+                return monitor.identity == frozen.identity;
+            }
+            (monitor.left, monitor.top, monitor.right, monitor.bottom)
+                == (frozen.left, frozen.top, frozen.right, frozen.bottom)
+        }) {
+            return Some(current);
+        }
+    }
+    primary.or_else(|| monitors.first().copied())
+}
+
+/// Map a captured external foreground HWND to the monitor containing that window.
 #[cfg(target_os = "windows")]
+pub(crate) fn monitor_rect_for_hwnd<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    raw_hwnd: usize,
+) -> Option<MonitorRect> {
+    use std::ffi::c_void;
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::Graphics::Gdi::{
+        GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+    };
+
+    let hwnd = HWND(raw_hwnd as *mut c_void);
+    if hwnd.0.is_null() {
+        return None;
+    }
+    let monitor = unsafe { MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST) };
+    if monitor.is_invalid() {
+        return None;
+    }
+    let mut info = MONITORINFO {
+        cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+        ..Default::default()
+    };
+    // SAFETY: `info` is initialized with the required structure size and is written by Win32.
+    if !unsafe { GetMonitorInfoW(monitor, &mut info).as_bool() } {
+        return None;
+    }
+    let rect = info.rcMonitor;
+    app.available_monitors()
+        .unwrap_or_default()
+        .iter()
+        .map(MonitorRect::from_tauri)
+        .find(|candidate| {
+            (
+                candidate.left,
+                candidate.top,
+                candidate.right,
+                candidate.bottom,
+            ) == (rect.left, rect.top, rect.right, rect.bottom)
+        })
+}
+
+pub(crate) fn monitor_at_point(monitors: &[MonitorRect], x: i32, y: i32) -> Option<MonitorRect> {
+    monitors
+        .iter()
+        .copied()
+        .find(|m| x >= m.left && x < m.right && y >= m.top && y < m.bottom)
+}
+
+/// Match the macOS pointer-based primary placement without querying the old window position.
+#[cfg(target_os = "macos")]
+pub(crate) fn target_monitor_rect<R: tauri::Runtime>(
+    window: &WebviewWindow<R>,
+) -> Option<MonitorRect> {
+    if let Some(m) = crate::capsule_target_monitor(window) {
+        return Some(MonitorRect {
+            left: m.physical_x,
+            top: m.physical_y,
+            right: m.physical_x + m.physical_width as i32,
+            bottom: m.physical_y + m.physical_height as i32,
+            work_left: m.work_x,
+            work_top: m.work_y,
+            work_right: m.work_x + m.work_width as i32,
+            work_bottom: m.work_y + m.work_height as i32,
+            scale: m.scale,
+            identity: 0,
+        });
+    }
+    window
+        .primary_monitor()
+        .ok()
+        .flatten()
+        .map(|m| MonitorRect::from_tauri(&m))
+}
+
+/// Every monitor currently connected, in the OS enumeration order.
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 pub(crate) fn all_monitor_rects<R: tauri::Runtime>(window: &WebviewWindow<R>) -> Vec<MonitorRect> {
     window
         .available_monitors()
@@ -122,15 +274,50 @@ pub(crate) fn capsule_placement(
     (phys_w.max(1) as u32, phys_h.max(1) as u32, x, y)
 }
 
-/// Every monitor except the primary one, in enumeration order, capped at
-/// [`MAX_CAPSULE_MIRRORS`].
-pub(crate) fn mirror_targets(monitors: &[MonitorRect], primary: MonitorRect) -> Vec<MonitorRect> {
+/// Mirror only on explicit opt-in, excluding the display already hosting the primary.
+pub(crate) fn mirror_targets(
+    mode: CapsuleDisplayMode,
+    monitors: &[MonitorRect],
+    primary: MonitorRect,
+) -> Vec<MonitorRect> {
+    if mode != CapsuleDisplayMode::AllScreens {
+        return Vec::new();
+    }
     monitors
         .iter()
         .copied()
-        .filter(|monitor| !monitor.is_same_monitor(&primary))
+        .filter(|m| {
+            (m.left, m.top, m.right, m.bottom)
+                != (primary.left, primary.top, primary.right, primary.bottom)
+        })
         .take(MAX_CAPSULE_MIRRORS)
         .collect()
+}
+
+/// Shared target selection for disposable overlays without a hidden WebView.
+pub(crate) fn display_targets(
+    mode: CapsuleDisplayMode,
+    monitors: &[MonitorRect],
+    primary: Option<MonitorRect>,
+    cursor: Option<(i32, i32)>,
+    frozen: Option<MonitorRect>,
+) -> Vec<MonitorRect> {
+    let target = match mode {
+        CapsuleDisplayMode::PrimaryScreen => primary.or_else(|| monitors.first().copied()),
+        CapsuleDisplayMode::ForegroundWindowScreen => {
+            resolve_frozen_monitor(frozen, monitors, primary)
+        }
+        CapsuleDisplayMode::CursorScreen | CapsuleDisplayMode::AllScreens => cursor
+            .and_then(|(x, y)| monitor_at_point(monitors, x, y))
+            .or(primary)
+            .or_else(|| monitors.first().copied()),
+    };
+    let Some(target) = target else {
+        return Vec::new();
+    };
+    let mut targets = vec![target];
+    targets.extend(mirror_targets(mode, monitors, target));
+    targets
 }
 
 /// Stable hash of the monitor layout. Changes when a monitor is connected, disconnected,
@@ -184,7 +371,7 @@ pub(crate) fn mirror_label(prefix: &str, index: usize) -> String {
 }
 
 /// Labels of existing mirror windows whose label starts with `prefix`.
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 pub(crate) fn existing_mirror_labels<R: tauri::Runtime>(
     app: &AppHandle<R>,
     prefix: &str,
@@ -197,7 +384,7 @@ pub(crate) fn existing_mirror_labels<R: tauri::Runtime>(
 }
 
 /// Returns the capsule mirror with `label`, creating it hidden when it does not exist yet.
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 pub(crate) fn ensure_capsule_mirror<R: tauri::Runtime>(
     app: &AppHandle<R>,
     label: &str,
@@ -205,7 +392,7 @@ pub(crate) fn ensure_capsule_mirror<R: tauri::Runtime>(
     if let Some(window) = app.get_webview_window(label) {
         return Ok(window);
     }
-    WebviewWindowBuilder::new(
+    let window = WebviewWindowBuilder::new(
         app,
         label,
         WebviewUrl::App("index.html?window=capsule".into()),
@@ -221,7 +408,26 @@ pub(crate) fn ensure_capsule_mirror<R: tauri::Runtime>(
     .focused(false)
     .visible(false)
     .accept_first_mouse(true)
-    .build()
+    .build()?;
+    #[cfg(target_os = "macos")]
+    {
+        use tauri_nspanel::cocoa::appkit::NSWindowCollectionBehavior;
+        use tauri_nspanel::WebviewWindowExt;
+        let panel = match window.to_panel() {
+            Ok(panel) => panel,
+            Err(error) => {
+                let _ = window.close();
+                return Err(error);
+            }
+        };
+        panel.set_style_mask(1 << 7); // Non-activating, like the primary capsule.
+        panel.set_level(25);
+        panel.set_collection_behaviour(
+            NSWindowCollectionBehavior::NSWindowCollectionBehaviorFullScreenAuxiliary
+                | NSWindowCollectionBehavior::NSWindowCollectionBehaviorCanJoinAllSpaces,
+        );
+    }
+    Ok(window)
 }
 
 /// Returns the transcript-rail mirror with `label`, creating it hidden when needed.
@@ -256,7 +462,14 @@ pub(crate) fn ensure_rail_mirror<R: tauri::Runtime>(
 mod tests {
     use super::*;
 
-    fn monitor(left: i32, top: i32, width: i32, height: i32, taskbar: i32, scale: f64) -> MonitorRect {
+    fn monitor(
+        left: i32,
+        top: i32,
+        width: i32,
+        height: i32,
+        taskbar: i32,
+        scale: f64,
+    ) -> MonitorRect {
         MonitorRect {
             left,
             top,
@@ -267,34 +480,167 @@ mod tests {
             work_right: left + width,
             work_bottom: top + height - taskbar,
             scale,
+            identity: 0,
         }
     }
 
+    fn monitor_with_identity(
+        left: i32,
+        top: i32,
+        width: i32,
+        height: i32,
+        taskbar: i32,
+        scale: f64,
+        identity: u64,
+    ) -> MonitorRect {
+        let mut monitor = monitor(left, top, width, height, taskbar, scale);
+        monitor.identity = identity;
+        monitor
+    }
+
     #[test]
-    fn mirror_targets_excludes_primary_and_keeps_enumeration_order() {
+    fn disposable_capsule_obeys_each_display_mode() {
+        let primary = monitor(0, 0, 1920, 1080, 40, 1.0);
+        let left = monitor(-1920, 0, 1920, 1080, 40, 1.0);
+        let right = monitor(1920, 0, 2560, 1440, 80, 1.5);
+        let monitors = [primary, left, right];
+        let select = |mode| {
+            display_targets(
+                mode,
+                &monitors,
+                Some(primary),
+                Some((-100, 20)),
+                Some(right),
+            )
+        };
+        assert_eq!(select(CapsuleDisplayMode::CursorScreen), vec![left]);
+        assert_eq!(select(CapsuleDisplayMode::PrimaryScreen), vec![primary]);
+        assert_eq!(
+            select(CapsuleDisplayMode::ForegroundWindowScreen),
+            vec![right]
+        );
+        assert_eq!(
+            select(CapsuleDisplayMode::AllScreens),
+            vec![left, primary, right]
+        );
+        assert_eq!(
+            display_targets(
+                CapsuleDisplayMode::ForegroundWindowScreen,
+                &[primary],
+                Some(primary),
+                Some((-100, 20)),
+                Some(right)
+            ),
+            vec![primary]
+        );
+        assert_eq!(
+            display_targets(
+                CapsuleDisplayMode::CursorScreen,
+                &monitors,
+                Some(primary),
+                None,
+                None
+            ),
+            vec![primary]
+        );
+        assert!(display_targets(CapsuleDisplayMode::AllScreens, &[], None, None, None).is_empty());
+    }
+
+    #[test]
+    fn frozen_monitor_keeps_current_work_area_and_falls_back_when_disconnected() {
+        let primary = monitor(0, 0, 1920, 1080, 40, 1.0);
+        let captured = monitor(-1920, 0, 1920, 1080, 40, 1.0);
+        let refreshed = monitor(-1920, 0, 1920, 1080, 80, 1.25);
+
+        assert_eq!(
+            resolve_frozen_monitor(Some(captured), &[refreshed, primary], Some(primary)),
+            Some(refreshed)
+        );
+        assert_eq!(
+            resolve_frozen_monitor(Some(captured), &[primary], Some(primary)),
+            Some(primary)
+        );
+        assert_eq!(
+            resolve_frozen_monitor(None, &[primary], Some(primary)),
+            Some(primary)
+        );
+    }
+
+    #[test]
+    fn frozen_monitor_identity_survives_resolution_and_layout_changes() {
+        let primary = monitor_with_identity(0, 0, 1920, 1080, 40, 1.0, 11);
+        let captured = monitor_with_identity(-1920, 0, 1920, 1080, 40, 1.0, 22);
+        let refreshed = monitor_with_identity(-2560, -120, 2560, 1440, 80, 1.5, 22);
+
+        assert_eq!(
+            resolve_frozen_monitor(Some(captured), &[primary, refreshed], Some(primary)),
+            Some(refreshed)
+        );
+    }
+
+    #[test]
+    fn multi_monitor_recording_has_no_duplicate_capsules() {
         let primary = monitor(0, 0, 1920, 1080, 40, 1.0);
         let left = monitor(-1920, 0, 1920, 1080, 40, 1.0);
         let right = monitor(1920, 0, 2560, 1440, 40, 1.5);
 
-        let targets = mirror_targets(&[left, primary, right], primary);
+        let targets = mirror_targets(
+            CapsuleDisplayMode::CursorScreen,
+            &[left, primary, right],
+            primary,
+        );
 
-        assert_eq!(targets, vec![left, right]);
+        assert!(targets.is_empty());
+        assert_eq!(
+            mirror_targets(
+                CapsuleDisplayMode::AllScreens,
+                &[left, primary, right],
+                primary
+            ),
+            vec![left, right]
+        );
+        assert_eq!(
+            mirror_targets(
+                CapsuleDisplayMode::AllScreens,
+                &[left, primary, right],
+                right
+            ),
+            vec![left, primary]
+        );
+        assert!(mirror_targets(CapsuleDisplayMode::AllScreens, &[primary], primary).is_empty());
+        assert_eq!(
+            monitor_at_point(&[left, primary, right], -20, 50),
+            Some(left)
+        );
+        assert_eq!(
+            monitor_at_point(&[left, primary, right], 2000, 50),
+            Some(right)
+        );
+        assert_eq!(
+            monitor_at_point(&[left, primary, right], 10, 50),
+            Some(primary)
+        );
+        assert_eq!(monitor_at_point(&[left, primary, right], 99999, 50), None);
     }
 
     #[test]
     fn mirror_targets_is_empty_on_single_monitor() {
         let primary = monitor(0, 0, 1920, 1080, 40, 1.0);
-        assert!(mirror_targets(&[primary], primary).is_empty());
+        assert!(mirror_targets(CapsuleDisplayMode::CursorScreen, &[primary], primary).is_empty());
     }
 
     #[test]
-    fn mirror_targets_caps_the_number_of_mirrors() {
+    fn cursor_only_never_mirrors_and_all_screens_is_bounded() {
         let primary = monitor(0, 0, 1920, 1080, 0, 1.0);
         let mut monitors = vec![primary];
         for i in 1..=(MAX_CAPSULE_MIRRORS as i32 + 3) {
             monitors.push(monitor(i * 1920, 0, 1920, 1080, 0, 1.0));
         }
-        assert_eq!(mirror_targets(&monitors, primary).len(), MAX_CAPSULE_MIRRORS);
+        assert!(mirror_targets(CapsuleDisplayMode::CursorScreen, &monitors, primary).is_empty());
+        assert_eq!(
+            mirror_targets(CapsuleDisplayMode::AllScreens, &monitors, primary).len(),
+            MAX_CAPSULE_MIRRORS
+        );
     }
 
     #[test]

@@ -1,14 +1,16 @@
+import { siwcKo as siwc } from './siwc';
 import type { zhCN } from './zh-CN';
 import { en } from './en';
 
 // 한국어 (Beta) — AI 기계 번역 기반. 원어민 검토를 권장합니다.
 // 구조는 zh-CN.ts 를 따릅니다. 새 key 를 추가할 때 ja.ts / ko.ts 도 동시에
 // 갱신해 주세요(갱신되지 않은 key 는 ...en 으로 영어로 fallback 됩니다).
-import { uiRefinementEn as uiRefinement } from './uiRefinement';
+import { uiRefinementKo as uiRefinement } from './uiRefinement';
 import { experimentalAsrEn as experimentalAsr } from './experimentalAsr';
 
 export const ko: typeof zhCN = {
   ...en,
+  siwc,
   experimentalAsr,
   uiRefinement,
   voiceEdit: {
@@ -159,7 +161,7 @@ export const ko: typeof zhCN = {
       '동기화 범위의 로컬 데이터를 교체합니다. 로컬 변경을 유지하려면 병합을 선택하세요.',
     restoreCheck: '복원 방식과 충돌 선택을 확인했습니다.',
     applyRestore: '복원 확인',
-    conflictProgress: '충돌 {{total}}개 중 {{selected}}개 해결',
+    conflictProgress: '충돌 {{selected}} / {{total}}개 해결',
     conflictItem: '충돌 {{index}} · {{category}}',
     conflictLocal: '로컬 유지',
     conflictCloud: '클라우드 사용',
@@ -302,6 +304,8 @@ export const ko: typeof zhCN = {
     cancelled: '취소됨',
     error: '오류 발생',
     inserted: '{{count}}자 입력됨',
+    translateTo: '번역 언어',
+    translationChangeFailed: '언어를 변경하지 못했습니다. 다시 선택해 주세요.',
     translating: '번역 중',
     liveTranslationTag: 'EN',
     selectionPolish: {
@@ -332,6 +336,12 @@ export const ko: typeof zhCN = {
     cancel: '취소',
   },
   qa: {
+    activity: {
+      searchingWeb: '웹 검색 중',
+      readingWeb: '웹 페이지 읽는 중',
+      usingTool: '{{tool}} 사용 중',
+      tool: '도구',
+    },
     compact: {
       closeError: '닫지 못했습니다. 다시 시도하세요.',
       sendError: '전송하지 못했습니다. 입력 내용은 유지됩니다. 다시 시도하세요.',
@@ -485,7 +495,7 @@ export const ko: typeof zhCN = {
     style: '스타일',
     marketplace: '마켓',
     translation: '번역',
-    selectionAsk: '선택 질문',
+    selectionAsk: '무엇이든 질문',
     quickNote: '속기',
     corrections: '교정 규칙',
     polishMode: '다듬기 모드',
@@ -1185,8 +1195,21 @@ export const ko: typeof zhCN = {
       fallbackDesc: '번역 실패 시 원본 전사가 삽입됩니다.',
     },
   },
+  askAnything: {
+    dictation: '받아쓰기',
+    translation: '번역',
+    question: '무엇이든 질문',
+    dictationHint: '말한 내용을 텍스트로 입력',
+    translationHint: '녹음 중 번역 언어 선택',
+    questionHint: '텍스트를 선택하거나 바로 질문',
+    description: '조합 키를 눌러 질문하고 다시 눌러 전송하세요. 답변은 화면 아래에 표시됩니다.',
+    auxiliaryKey: '질문 추가 키',
+    auxiliaryHint: '{{key}} 키와 함께 누르세요. 녹음 키 변경이 자동 반영됩니다.',
+    selectionHint:
+      '선택한 텍스트를 문맥으로 사용합니다. 선택 없이도 질문할 수 있으며 매번 새 질문을 시작합니다.',
+  },
   selectionAsk: {
-    title: '선택 질문',
+    title: '무엇이든 질문',
     desc: '텍스트 선택 후 음성으로 질문. 다중 라운드 후속 질문 지원.',
     shortcutSettings: '단축키 설정',
     guide: {
@@ -1312,6 +1335,16 @@ export const ko: typeof zhCN = {
       cursorContextLabel: '커서 문맥 (실험적)',
       cursorContextDesc:
         '다듬기 요청 시 커서 주변의 짧은 텍스트를 참고 자료로 모델에 보내 고유명사, 동음이의어, 지시어 판단에 사용합니다(macOS / Windows / Android). 받아쓰기, 빠른 메모, 클라우드 메모 모두 참고하지만 컨텍스트 자체는 메모, 기록, 로그에 저장되지 않습니다. 클라우드 모델을 사용하면 다듬기 요청과 함께 해당 제공업체로 전송됩니다. 기기 내 단어 학습과 별도 설정입니다. 비밀번호 입력란, 터미널, 알려진 민감한 앱은 제외됩니다.',
+    },
+    localMigration: {
+      title: '로컬 구성 마이그레이션',
+      description:
+        '이식 가능한 모든 로컬 구성을 버전이 지정된 번들로 내보내거나 다른 Android 기기에 복원합니다. 공유 모드는 기본적으로 비식별화되며, 개인 마이그레이션에 자격 증명을 포함하려면 비밀번호 보호가 필요합니다. 병합 또는 교체 전에 네이티브 화면에서 출처, 버전, 범주와 변경 내용을 확인할 수 있습니다.',
+      safetyNote:
+        '시스템 권한, OAuth 세션, 기기 경로와 실행 상태는 마이그레이션되지 않습니다. 가져오기 전에 로컬 백업을 만듭니다.',
+      open: '로컬 마이그레이션 열기',
+      opening: '여는 중…',
+      openFailed: '로컬 마이그레이션을 열 수 없습니다. 설정에서 다시 시도하세요.',
     },
     codingConsole: {
       title: 'Claude 콘솔',
@@ -1464,7 +1497,6 @@ export const ko: typeof zhCN = {
       microphoneMonitorError: '입력 레벨 모니터링 실패: {{message}}',
       capsuleLabel: '녹음 캡슐',
       capsuleDesc: '녹음 / 전사 중 화면 하단에 반투명 캡슐을 표시합니다.',
-      capsuleStyleTypeless: 'Typeless 컴팩트 스타일',
       capsuleTranscriptLabel: '실시간 원문 표시',
       capsuleTranscriptDesc:
         '오디오 막대 대신 인식된 원문을 표시합니다. 끄면 기존 표시로 돌아갑니다. 비스트리밍 인식은 결과 수신 후 표시됩니다.',
@@ -1476,18 +1508,56 @@ export const ko: typeof zhCN = {
         '멀티모달 모드이면서 채널이 Bailian(dashscope-omni)이어야 합니다.',
       liveTranslationPreviewUnavailableStreaming:
         '현재 인식 기능이 이미 실시간 원문을 제공하므로 이 미리보기는 활성화되지 않습니다.',
+      capsuleDisplayModeLabel: '다중 화면 캡슐',
+      capsuleDisplayModeDesc:
+        '녹음 캡슐을 표시할 화면을 선택합니다. 모든 화면 모드는 창과 그래픽 리소스를 더 사용합니다.',
+      capsuleDisplayCursorScreen: '마우스 포인터가 있는 화면',
+      capsuleDisplayPrimaryScreen: '주 디스플레이만',
+      capsuleDisplayForegroundWindowScreen: '전경 창이 있는 화면',
+      capsuleDisplayAllScreens: '모든 화면에 표시',
+      capsuleDisplayModeRestartTitle: '표시 모드를 적용하려면 OpenLess를 다시 시작하세요',
+      capsuleDisplayModeRestartDesc:
+        '모든 화면 표시에서 전환하려면 이전 캡슐 창을 정리하기 위해 다시 시작해야 합니다. 지금 다시 시작할까요?',
       capsuleStyleLabel: '캡슐 스타일',
       capsuleStyleSiri: '시리 광선 스타일',
-      capsuleStyleClassic: 'Openless 기본 스타일',
+      capsuleStyleClassic: 'OpenLess 기본 스타일',
       stableTranscriptionLabel: '안정 모드 (녹음 후 전사)',
       stableTranscriptionDesc:
         '켜면 녹음 중에는 ASR에 연결하지 않고 중지한 뒤 전체 오디오를 전송합니다. 결과는 늦게 표시되지만 연결 지연이나 녹음 중 네트워크 불안정이 녹음에 영향을 주지 않습니다.',
       lowLatencyDictationLabel: '저지연 캡처',
       lowLatencyDictationDesc:
         '마이크 스트림을 준비하고 최대 500ms를 메모리에 보관해 단축키 직후의 음성이 누락될 가능성을 줄입니다. 녹음을 확정하기 전에는 오디오를 저장하거나 업로드하지 않습니다. 전력 사용량이 늘고 마이크 표시가 계속 켜져 있습니다.',
-      audioEnhancementLabel: '가벼운 마이크 향상',
+      dsp: {
+        noise: 'Noise reduction',
+        dereverb: 'Comb filter',
+        equalizer: 'Equalizer',
+        gain: 'Input gain',
+        agc: 'Automatic gain',
+        vad: 'Speech gate',
+        title: 'Speech enhancement settings',
+        description:
+          'RNNoise is lightweight; PureVox offers model-based noise reduction with higher CPU use. Changes apply to the next recording.',
+        off: 'Off',
+        spectral: 'Spectral subtraction',
+        strength: 'Noise reduction strength',
+        target: 'Target level',
+        attack: 'Attack speed',
+        decay: 'Release speed',
+        vadHint:
+          'Attenuates quiet passages; it does not stop recording. A high threshold can remove quiet speech.',
+        threshold: 'Speech gate threshold',
+        tone: 'Tone and room adjustments',
+        combHint:
+          'The comb filter follows MicYou’s simple delay subtraction. It can color speech; start at 0%.',
+        preamp: 'Equalizer preamp',
+        order: 'Processing order',
+        up: 'Move up',
+        down: 'Move down',
+        reset: 'Reset enhancement settings',
+      },
+      audioEnhancementLabel: '음성 향상',
       audioEnhancementDesc:
-        '로컬 마이크에 가벼운 소음 억제, 게인과 소프트 리미터를 적용합니다. 에코 제거는 포함하지 않으며 기본값은 꺼짐입니다.',
+        'RNNoise 또는 PureVox 소음 억제, 자동 게인 및 리미터를 적용합니다. 기본값은 꺼짐이며 다음 녹음부터 적용됩니다.',
       muteDuringRecordingLabel: '녹음 중 음소거',
       muteDuringRecordingDesc:
         '녹음 중 시스템 출력을 일시적으로 음소거하여 스피커 에코를 방지합니다.',
@@ -1505,6 +1575,9 @@ export const ko: typeof zhCN = {
       pasteShortcutCtrlV: 'Ctrl+V (기본 / 대부분 앱)',
       pasteShortcutCtrlShiftV: 'Ctrl+Shift+V (kitty / alacritty / wezterm / 대부분 터미널)',
       pasteShortcutShiftInsert: 'Shift+Insert (xterm / urxvt)',
+      plainTextInsertionLabel: '일반 텍스트 삽입 모드',
+      plainTextInsertionDesc:
+        '켜면 모의 붙여넣기에 Ctrl+V 대신 Shift+Insert를 사용합니다(켜져 있는 동안 위 단축키는 변경할 수 없습니다). 매우 특수한 경우에만 켜세요(예: Punto Switcher 같은 키보드 레이아웃 전환 도구가 Ctrl+V를 가로챌 때). 클립보드 붙여넣기 방식에만 적용됩니다(Windows 전용).',
       comboRecordLabel: '단축키 녹화',
       comboRecordDesc:
         '클릭 후 원하는 단축키 조합(예: ⌘⇧D)을 누르세요. 토글 및 누르기 모드 모두 지원합니다.',
@@ -1563,7 +1636,31 @@ export const ko: typeof zhCN = {
       recordAudioForDebugDesc: '원시 마이크 오디오를 wav 로 저장하여 인식 문제 진단.',
       audioRecordingMaxEntriesLabel: '원본 녹음 보관 개수',
       audioRecordingMaxEntriesDesc: '로컬 보관 wav 파일 상한. 빈칸 = 200.',
+      voiceActivationLabel: '음성 활성화',
+      voiceActivationDesc: '받아쓰기 시작 구문을 로컬에서 감지합니다.',
+      voiceActivationLocalOnly:
+        '인식은 이 기기에서만 수행되며 대기 오디오는 업로드하거나 보관하지 않습니다.',
+      voiceActivationMultimodalModels:
+        '여기에서 음성 활성화 모델을 준비합니다. 받아쓰기는 현재 멀티모달 서비스를 계속 사용합니다.',
+      voiceActivationModelMissing: '로컬 Zipformer 모델이 설치되지 않았습니다.',
+      voiceActivationDownloadZipformer: 'Zipformer 다운로드',
+      voiceActivationWakeEnabled: '시작 구문',
+      voiceActivationWakePhrase: '시작 구문',
+      voiceActivationFinishEnabled: '종료 구문',
+      voiceActivationFinishPhrase: '종료 구문',
+      voiceActivationTimeoutEnabled: '시간 초과 후 중지',
+      voiceActivationTimeoutSeconds: '시간 초과(초)',
       startupGroupTitle: '시작',
+      lowMemoryBackgroundLabel: '저메모리 백그라운드 모드',
+      lowMemoryBackgroundDesc:
+        '재시작 후 적용됩니다. 메인 창을 닫으면 해제하고 녹음 시에만 네이티브 캡슐을 표시합니다. 대기 중 마이크 사전 실행을 끕니다. 로컬 모델 해제 설정은 유지됩니다.',
+      lowMemoryRestartLabel: '재시작 후 적용',
+      lowMemoryRestartDesc:
+        '저메모리 백그라운드 모드 설정이 저장되었습니다. 실행 모드는 앱을 재시작해야 전환됩니다.',
+      lowMemoryRestartNow: '지금 재시작',
+      lowMemoryCapsuleErrorLabel: '네이티브 캡슐을 사용할 수 없음',
+      lowMemoryCapsuleErrorDesc:
+        '받아쓰기는 계속 사용할 수 있지만 플로팅 캡슐이 표시되지 않습니다. 헬퍼가 없거나 차단되었을 수 있습니다. 앱을 다시 설치해 주세요.',
       startMinimizedLabel: '시작 시 메인 창 숨기기',
       startMinimizedDesc:
         '모든 시작 경로에서 메인 창을 열지 않고 메뉴 막대 / 트레이에서만 실행합니다.',
@@ -1680,6 +1777,7 @@ export const ko: typeof zhCN = {
         openai: 'OpenAI',
         gemini: 'Google Gemini',
         codexOAuth: 'Codex OAuth',
+        chatgptSiwc: 'ChatGPT Plan',
         mimo: 'Xiaomi MiMo',
         cometapi: 'CometAPI',
         openrouterFree: 'OpenRouter(무료 모델)',
@@ -1729,9 +1827,9 @@ export const ko: typeof zhCN = {
         omniDashscope: 'Alibaba DashScope Omni',
       },
       geminiTranscribeNotice:
-        '여기서는 gemini-3.5-transcribe로 그대로 전사한 뒤 설정된 LLM으로 처리합니다. 스마트 전사를 사용하려면 멀티모달 모드에서 이 모델을 선택하세요. 녹음이 끝나면 오디오를 업로드하며 실시간 전사는 지원하지 않습니다. 기본 URL: https://generativelanguage.googleapis.com/v1beta (/v1beta/interactions도 사용 가능).',
+        '두 모델 모두 여기서는 말한 그대로 전사하며, 필요하면 설정된 LLM으로 추가 처리할 수 있습니다. gemini-3.5-transcribe는 녹음이 끝나면 오디오를 업로드합니다. gemini-3.5-transcribe-live는 말하는 동안 결과를 표시하며, 녹음은 한 번에 최대 10분까지 가능합니다. 스마트 전사에는 멀티모달 모드를 사용하세요. 기본 URL: https://generativelanguage.googleapis.com/v1beta.',
       geminiTranscribeOmniNotice:
-        'gemini-3.5-transcribe는 스마트 전사를 제공합니다. 녹음 후 군더더기 표현을 제거하고 말로 한 정정을 반영하며 문장을 정리합니다. 작업 언어와 사전 용어를 지원합니다. 스타일 프롬프트, 번역, 텍스트 다듬기, 질의응답은 지원하지 않습니다. 해당 작업에는 기존 모드와 LLM을 사용하세요.',
+        'gemini-3.5-transcribe와 gemini-3.5-transcribe-live는 스마트 전사를 지원합니다. Live는 말하는 동안 초안을 표시하며, 녹음은 한 번에 최대 10분까지 가능합니다. 녹음이 끝나면 군더더기 표현을 제거하고 말로 한 정정을 반영하며 최종 텍스트를 정리합니다. 두 모델 모두 작업 언어와 사전 용어를 지원하지만 스타일 프롬프트, 번역, 텍스트 다듬기, 질의응답은 지원하지 않습니다. 해당 작업에는 기존 모드와 LLM을 사용하세요.',
       validateSuccessAudio:
         '짧은 무음 샘플로 오디오 연결을 확인했습니다. 짧은 녹음으로 전사 품질도 확인하세요.',
       elevenLabsUploadNotice:
@@ -1764,8 +1862,9 @@ export const ko: typeof zhCN = {
       volcengineAuthModeApiKey: '새 콘솔 API Key',
       volcengineMappingNote:
         'Secret Key 는 현재 입력 불필요. Resource ID 기본값은 volc.seedasr.sauc.duration.',
-      volcengineApiKeyNote:
-        '새 음성 콘솔에서 만든 API Key로 인증하며 APP ID는 필요 없습니다. API Key는 음성 콘솔의 "API Key 관리"에서 생성합니다: console.volcengine.com/speech/new/setting/apikeys. Resource ID 기본값은 volc.seedasr.sauc.duration입니다.',
+      volcengineApiKeyConsole: 'Doubao Speech · API Key 관리',
+      volcengineApiKeyNote: '여기서 만든 음성 API Key로 인증하세요. Ark 키는 사용할 수 없습니다.',
+      volcengineResourceIdNote: 'Resource ID 기본값은 {{resourceId}}입니다.',
       xfyunAppIdLabel: 'AppID',
       xfyunApiKeyLabel: 'API Key',
       xfyunNote:
@@ -2070,11 +2169,13 @@ export const ko: typeof zhCN = {
         background: '백그라운드',
         keyboard: '키보드 표시 시',
         always: '항상',
+        never: '표시 안 함',
       },
       androidOverlayTriggerHint: {
         background: '단순',
         keyboard: '이 모드는 보류되었습니다. 기존 설정은 백그라운드로 되돌립니다.',
         always: '항상 표시',
+        never: '자동으로 표시되지 않으며 키보드는 계속 사용할 수 있습니다.',
       },
       androidOverlayTriggerDisabled: {
         keyboard: '키보드 표시 감지는 보류되었습니다. 이후 오버레이 제스처로 대체합니다.',
@@ -2144,6 +2245,9 @@ export const ko: typeof zhCN = {
       streamingInsertHintWindows: 'SendInput Unicode 로 TSF / IME 를 우회. 입력 소스 전환 불필요.',
       streamingInsertHintLinux:
         'fcitx5 플러그인으로 텍스트 전송. 스트리밍 입력은 enigo + XTest 키 합성 사용.',
+      windowsCompositionInputLabel: '실시간 원문을 입력창에 표시 (Windows)',
+      windowsCompositionInputDesc:
+        '녹음 중 인식된 텍스트를 밑줄이 그어진 조합 텍스트로 입력창에 표시하고, 완료되면 최종 결과로 바꿉니다. OpenLess TSF 입력 구성 요소와 TSF를 지원하는 앱이 필요합니다.',
       streamingInsertSaveClipboardLabel: '클립보드에 저장',
       streamingInsertSaveClipboardHint:
         '삽입 성공 후 최종 텍스트를 클립보드에 기록하여 Cmd+V 로 다시 붙여넣을 수 있게 합니다. 끄면 클립보드를 건드리지 않습니다.',
@@ -2151,6 +2255,9 @@ export const ko: typeof zhCN = {
       localAsrDesc:
         '전사를 클라우드에서 로컬 추론으로 전환합니다. 오프라인 / 프라이버시용에만 권장됩니다.',
       localAsrWarningShort: '로컬 추론은 느리며, 사양 부족 시 글자 누락이 발생할 수 있습니다.',
+      localAsrFallbackLabel: '클라우드 인식이 실패하면 로컬 모델 사용',
+      localAsrFallbackDesc:
+        '네트워크가 불안정하거나 오프라인일 때 클라우드 재시도를 기다리지 않고 다운로드한 로컬 모델로 녹음을 인식합니다. 로컬 모델을 먼저 다운로드해야 합니다.',
       qwen3Desc: '활성화하면 ASR 프로바이더가 인수됩니다.',
       sherpaDesc: '활성화하면 ASR 프로바이더가 인수됩니다.',
       foundryDesc: '활성화하면 ASR 프로바이더가 인수됩니다.',

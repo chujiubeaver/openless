@@ -684,6 +684,14 @@ impl Coordinator {
             );
 
             let app = crate::core_adapters::app_handle_slot();
+            // arm64 Android links sherpa-onnx (build.rs `local_asr_sherpa`) and
+            // gets the same runtime pair Windows builds in new_with_local_runtimes().
+            #[cfg(local_asr_sherpa)]
+            let native_asr = crate::core_adapters::TauriNativeAsrDependencies::new(
+                Arc::new(crate::asr::local::FoundryLocalRuntime::new()),
+                Arc::new(crate::asr::local::SherpaOnnxRuntime::new()),
+            );
+            #[cfg(not(local_asr_sherpa))]
             let native_asr = crate::core_adapters::TauriNativeAsrDependencies::new();
             let hotkey_status = Arc::new(Mutex::new(HotkeyStatus::default()));
             let qa_context = Arc::new(TauriQaHostContext::default());
@@ -701,7 +709,14 @@ impl Coordinator {
                 startup_error,
             );
 
-            let host = crate::tauri_coordinator_host::TauriCoordinatorHost::new(Arc::clone(&app));
+            let host = crate::tauri_coordinator_host::TauriCoordinatorHost::new(
+                Arc::clone(&app),
+                Arc::clone(&qa_context),
+            );
+            let voice_surface_host = host.clone();
+            qa_context.bind_voice_surface_owner(Arc::new(move |active| {
+                voice_surface_host.set_qa_voice_active(active)
+            }));
             let hotkey_runtime_target = (&backend.get_preferences()).into();
             let inner = Arc::new(Inner {
                 host,
@@ -834,7 +849,14 @@ impl Coordinator {
             startup_error,
         );
 
-        let host = crate::tauri_coordinator_host::TauriCoordinatorHost::new(Arc::clone(&app));
+        let host = crate::tauri_coordinator_host::TauriCoordinatorHost::new(
+            Arc::clone(&app),
+            Arc::clone(&qa_context),
+        );
+        let voice_surface_host = host.clone();
+        qa_context.bind_voice_surface_owner(Arc::new(move |active| {
+            voice_surface_host.set_qa_voice_active(active)
+        }));
         let hotkey_runtime_target = (&backend.get_preferences()).into();
         let inner = Arc::new(Inner {
             host,
@@ -1062,8 +1084,11 @@ impl Coordinator {
                     AndroidOverlayTrigger::Background => "background",
                     AndroidOverlayTrigger::Keyboard => "keyboard",
                     AndroidOverlayTrigger::Always => "always",
+                    AndroidOverlayTrigger::Never => "never",
                 }
             }
+            let from = from.normalized();
+            let to = to.normalized();
             if from == to {
                 return;
             }
@@ -1072,20 +1097,15 @@ impl Coordinator {
                 overlay_trigger_log_name(from),
                 overlay_trigger_log_name(to),
             );
-            match (from, to) {
-                (
-                    AndroidOverlayTrigger::Background | AndroidOverlayTrigger::Keyboard,
-                    AndroidOverlayTrigger::Always,
-                ) => {
+            match to {
+                AndroidOverlayTrigger::Always => {
                     let _ = crate::android::replace_android_overlay();
                 }
-                (
-                    AndroidOverlayTrigger::Always,
-                    AndroidOverlayTrigger::Background | AndroidOverlayTrigger::Keyboard,
-                ) => {
+                AndroidOverlayTrigger::Background
+                | AndroidOverlayTrigger::Keyboard
+                | AndroidOverlayTrigger::Never => {
                     let _ = crate::android::hide_android_overlay();
                 }
-                _ => {}
             }
         }
         let _ = (from, to);
@@ -1099,7 +1119,9 @@ impl Coordinator {
                 AndroidOverlayTrigger::Always => {
                     let _ = crate::android::replace_android_overlay();
                 }
-                AndroidOverlayTrigger::Background | AndroidOverlayTrigger::Keyboard => {
+                AndroidOverlayTrigger::Background
+                | AndroidOverlayTrigger::Keyboard
+                | AndroidOverlayTrigger::Never => {
                     let _ = crate::android::hide_android_overlay();
                 }
             }
@@ -1196,11 +1218,7 @@ impl Coordinator {
     /// `start_hotkey_listener`: a daemon thread retries registration every 3s
     /// on failure (the user may have changed the combo).
     pub fn start_qa_hotkey_listener(&self) {
-        let inner = Arc::clone(&self.inner);
-        std::thread::Builder::new()
-            .name("openless-qa-hotkey-supervisor".into())
-            .spawn(move || qa_hotkey_supervisor_loop(inner))
-            .ok();
+        qa::install_recording_companion(&self.inner);
     }
 
     /// Starts the "quick Agent" dual-hotkey supervisor, parallel to the QA
@@ -1545,9 +1563,13 @@ impl Coordinator {
     /// After saving, syncs style, window size, and click region without
     /// waiting for the next recording state event.
     pub fn sync_capsule_style_from_preferences(&self) {
+        let preferences = self.inner.backend.get_preferences();
         self.inner
             .host
-            .cache_capsule_style(self.inner.backend.get_preferences().capsule_style);
+            .cache_capsule_display_mode(preferences.capsule_display_mode);
+        self.inner
+            .host
+            .cache_capsule_style(preferences.capsule_style);
     }
     /// Apply only the Tauri presentation side of the Core-owned vocabulary
     /// suggestion state. Commands mutate the Core collection first, then pass
@@ -1642,6 +1664,9 @@ impl Coordinator {
         let previous = &change.previous;
         let next = &change.next;
         *self.inner.hotkey_runtime_target.lock() = next.clone();
+        if previous.dictation != next.dictation || previous.qa_companion_key != next.qa_companion_key {
+            crate::recording_companion::configure(next.dictation.clone(), next.qa_companion_key.clone());
+        }
 
         if previous.translation != next.translation {
             self.try_update_translation_hotkey_binding()?;
@@ -1799,14 +1824,7 @@ impl Coordinator {
             .backend
             .services()
             .qa
-            .show()
-            .await
-            .map_err(|error| error.message)?;
-        self.inner
-            .backend
-            .services()
-            .qa
-            .toggle_recording()
+            .start_question()
             .await
             .map_err(|error| error.message)
     }
@@ -1878,6 +1896,7 @@ impl Coordinator {
     }
 
     pub fn set_shortcut_recording_active(&self, active: bool) {
+        crate::recording_companion::suspend(active);
         self.inner
             .shortcut_recording_active
             .store(active, Ordering::SeqCst);

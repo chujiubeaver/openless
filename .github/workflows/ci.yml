@@ -9,7 +9,7 @@ name: CI
 
 on:
   push:
-    branches: [main, beta]
+    branches: ['**']
   pull_request:
     branches: [main, beta]
   workflow_dispatch:
@@ -37,6 +37,9 @@ jobs:
       tauri: ${{ steps.detect.outputs.tauri }}
       msrv: ${{ steps.detect.outputs.msrv }}
       linux: ${{ steps.detect.outputs.linux }}
+      harmony: ${{ steps.detect.outputs.harmony }}
+      # Validate the pinned minimum compiler whenever native sources can change.
+      msrv_needed: ${{ steps.detect.outputs.msrv }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -50,7 +53,7 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           set -euo pipefail
-          for area in tauri msrv linux; do
+          for area in tauri msrv linux harmony; do
             verdict=$(bash scripts/ci-changed-areas.sh "$area" "$BASE_SHA")
             # 失败即运行：脚本读不到差异时返回 true，这里也只接受明确的 false。
             echo "$area=$( [ "$verdict" = 'false' ] && echo false || echo true )" >> "$GITHUB_OUTPUT"
@@ -69,11 +72,33 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-          cache: npm
-          cache-dependency-path: openless-all/app/package-lock.json
+      - name: Cache npm from beta
+        uses: ./.github/actions/cache-npm
       - run: npm ci
       - run: npm run build
-      - run: npx playwright install --with-deps chromium webkit
+      - name: Resolve Playwright browser version
+        id: playwright_version
+        run: |
+          version=$(node -p "require('@playwright/test/package.json').version")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Restore Playwright browsers
+        id: playwright_cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.cache/ms-playwright
+          # Browser revisions follow Playwright, not unrelated npm lock changes.
+          key: playwright-v1-${{ runner.os }}-${{ runner.arch }}-ubuntu24-${{ steps.playwright_version.outputs.version }}
+      - name: Install Playwright system dependencies
+        run: npx playwright install-deps chromium webkit
+      - name: Install Playwright browsers on cache miss
+        if: steps.playwright_cache.outputs.cache-hit != 'true'
+        run: npx playwright install chromium webkit
+      - name: Save Playwright browsers on beta builds
+        if: steps.playwright_cache.outputs.cache-hit != 'true' && github.ref == 'refs/heads/beta' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ steps.playwright_cache.outputs.cache-primary-key }}
       - run: npm run test:ui-motion
       - uses: actions/upload-artifact@v4
         if: failure()
@@ -132,8 +157,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-          cache: npm
-          cache-dependency-path: openless-all/app/package-lock.json
+      - name: Cache npm from beta
+        uses: ./.github/actions/cache-npm
 
       - uses: actions/setup-java@v4
         with:
@@ -146,18 +171,19 @@ jobs:
 
       - uses: swatinem/rust-cache@v2
         with:
+          shared-key: tauri-android
           workspaces: 'openless-all/app/src-tauri -> target'
-          # 仓库缓存上限 10 GB，超出后按 LRU 淘汰。过去每个 PR 都会各存一份
-          # ~1.6 GB 的依赖树，把其他 job 的缓存挤掉，导致每次运行都从零编译。
-          # 现在 PR 只从基线分支恢复，只有分支推送和 tag 才写入缓存。
-          save-if: ${{ github.event_name != 'pull_request' }}
+          # Only beta maintains the shared dependency tree; PRs restore it.
+          save-if: ${{ github.ref == 'refs/heads/beta' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
 
       - uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-read-only: ${{ github.ref != 'refs/heads/beta' || (github.event_name != 'push' && github.event_name != 'workflow_dispatch') }}
 
       - name: Install Linux check dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential curl file libssl-dev wget
+          sudo apt-get install -y build-essential curl file libpulse0 libssl-dev wget
 
       - name: Install frontend dependencies
         run: npm ci
@@ -168,6 +194,12 @@ jobs:
 
       - name: Check Android updater pubkey matches tauri.conf.json
         run: npm run check:android-updater-pubkey
+
+      # arm64 Android links sherpa-onnx's shared libraries (local ASR). Its
+      # build script finds them through SHERPA_ONNX_LIB_DIR and has no Android
+      # prebuilt download of its own.
+      - name: Prepare sherpa-onnx Android libraries
+        run: echo "SHERPA_ONNX_LIB_DIR=$(node scripts/sherpa-onnx-android.mjs)" >> "$GITHUB_ENV"
 
       - name: Check Tauri backend (Android target)
         run: cargo check --locked --manifest-path src-tauri/Cargo.toml --target aarch64-linux-android
@@ -188,6 +220,26 @@ jobs:
 
       - name: Copy Android production and test scaffolding
         run: node scripts/copy-android-scaffolding.mjs
+
+      - name: Restore Android Rime instrumentation dependencies
+        id: rime_cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/openless-cache/mobile-rime
+          key: mobile-rime-ndk26-x86_64-${{ hashFiles('openless-all/app/scripts/build-mobile-rime.py', 'openless-all/app/mobile-ime/**') }}
+      - name: Build and stage Rime for Android instrumentation tests
+        env:
+          OPENLESS_CACHE_ROOT: ${{ runner.temp }}/openless-cache
+        run: python3 scripts/build-mobile-rime.py android --abi x86_64 --stage
+
+      - name: Save Android Rime dependencies on beta builds
+        # 400 MB per entry: pull request scopes are never restored again, so only
+        # the beta branch may write this cache.
+        if: steps.rime_cache.outputs.cache-hit != 'true' && github.ref == 'refs/heads/beta' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/openless-cache/mobile-rime
+          key: ${{ steps.rime_cache.outputs.cache-primary-key }}
 
       - name: Merge Shizuku manifest
         run: node scripts/merge-android-shizuku-manifest.mjs
@@ -213,20 +265,227 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
-      - name: Run Android Keystore instrumentation tests
-        uses: reactivecircus/android-emulator-runner@v2
+      - name: Restore the pinned Android emulator and system image
+        id: emulator_cache
+        uses: actions/cache/restore@v4
         with:
-          api-level: 35
-          target: google_apis
-          arch: x86_64
-          # The instrumentation suite exercises AndroidKeyStore without launching Tauri.
-          script: >-
-            cd openless-all/app &&
-            src-tauri/gen/android/gradlew
-            --project-dir src-tauri/gen/android
-            :app:connectedX86_64DebugAndroidTest
-            -x :app:rustBuildX86_64Debug
-            --no-daemon
+          path: |
+            ${{ env.ANDROID_HOME }}/emulator
+            ${{ env.ANDROID_HOME }}/system-images/android-35/google_apis/x86_64
+          key: android-emulator-v2-16555280-api35-google_apis-x86_64-${{ runner.os }}-${{ runner.arch }}
+
+      - name: Prepare the pinned Android emulator and system image
+        env:
+          EMULATOR_CACHE_HIT: ${{ steps.emulator_cache.outputs.cache-hit }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          image="$ANDROID_HOME/system-images/android-35/google_apis/x86_64"
+          validate_emulator() {
+            local version
+            # Drain the launcher output before grep: an early reader exit causes SIGPIPE.
+            if version=$("$1" -version 2>&1) && grep -Fq 'build_id 16555280' <<< "$version"; then
+              return 0
+            fi
+            printf '%s\n' "$version" >&2
+            return 1
+          }
+          validate_image() { [ -s "$image/system.img" ] && [ -s "$image/package.xml" ]; }
+          # Register the pinned package before sdkmanager resolves image dependencies.
+          register_emulator() {
+            if [ ! -s "$ANDROID_HOME/emulator/package.xml" ]; then
+              python3 - "$ANDROID_HOME/emulator" <<'PY'
+          from pathlib import Path
+          import sys
+          import xml.etree.ElementTree as ET
+          emulator = Path(sys.argv[1])
+          props = dict(line.split('=', 1) for line in (emulator / 'source.properties').read_text().splitlines() if '=' in line)
+          ET.register_namespace('common', 'http://schemas.android.com/repository/android/common/02')
+          ET.register_namespace('xsi', 'http://www.w3.org/2001/XMLSchema-instance')
+          root = ET.Element('{http://schemas.android.com/repository/android/common/02}repository', {'xmlns:generic': 'http://schemas.android.com/repository/android/generic/02'})
+          package = ET.SubElement(root, 'localPackage', {'path': 'emulator', 'obsolete': 'false'})
+          ET.SubElement(package, 'type-details', {'{http://www.w3.org/2001/XMLSchema-instance}type': 'generic:genericDetailsType'})
+          revision = ET.SubElement(package, 'revision')
+          for tag, value in zip(('major', 'minor', 'micro'), props['Pkg.Revision'].strip().split('.')[:3]):
+              ET.SubElement(revision, tag).text = str(int(value))
+          ET.SubElement(package, 'display-name').text = 'Android Emulator'
+          ET.ElementTree(root).write(emulator / 'package.xml', encoding='utf-8', xml_declaration=True)
+          PY
+            fi
+          }
+          if [ "$EMULATOR_CACHE_HIT" != 'true' ]; then
+            work=$(mktemp -d "$RUNNER_TEMP/openless-emulator.XXXXXX")
+            trap 'rm -rf "$work"' EXIT
+            for attempt in 1 2 3; do
+              echo "Install emulator build 16555280 and API 35 image (attempt $attempt)"
+              if curl -fL --connect-timeout 30 --max-time 180 \
+                  -o "$work/emulator.zip" https://dl.google.com/android/repository/emulator-linux_x64-16555280.zip \
+                  && unzip -tq "$work/emulator.zip" \
+                  && unzip -oq "$work/emulator.zip" -d "$work" \
+                  && validate_emulator "$work/emulator/emulator"; then
+                rm -rf "$ANDROID_HOME/emulator"
+                mv "$work/emulator" "$ANDROID_HOME/emulator"
+                register_emulator
+                if sdkmanager 'system-images;android-35;google_apis;x86_64' && validate_image; then
+                  break
+                fi
+                rm -rf "$ANDROID_HOME/emulator"
+              fi
+              rm -rf "$work/emulator" "$image"
+              if [ "$attempt" -eq 3 ]; then
+                echo '::error::could not install the pinned emulator and system image after 3 attempts'
+                exit 1
+              fi
+              sleep 15
+            done
+          fi
+          validate_emulator "$ANDROID_HOME/emulator/emulator" \
+            || { echo '::error::cached emulator does not match build 16555280'; exit 1; }
+          validate_image || { echo '::error::Android API 35 system image is incomplete'; exit 1; }
+          register_emulator
+
+      - name: Save the Android emulator on beta builds
+        if: steps.emulator_cache.outputs.cache-hit != 'true' && github.ref == 'refs/heads/beta' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ${{ env.ANDROID_HOME }}/emulator
+            ${{ env.ANDROID_HOME }}/system-images/android-35/google_apis/x86_64
+          key: ${{ steps.emulator_cache.outputs.cache-primary-key }}
+
+      - name: Run Android Keystore instrumentation tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          # SDK tools and the pinned emulator must share the same AVD registry.
+          export ANDROID_AVD_HOME="$RUNNER_TEMP/openless-ci-avds"
+          mkdir -p "$ANDROID_AVD_HOME"
+          avd="$RUNNER_TEMP/openless-ci.avd"
+          printf 'no\n' | avdmanager create avd --force --name openless-ci \
+            --package 'system-images;android-35;google_apis;x86_64' --path "$avd"
+          sed '/^hw[.]keyboard[ =]/d' "$avd/config.ini" > "$avd/config.ini.tmp"
+          mv "$avd/config.ini.tmp" "$avd/config.ini"
+          echo 'hw.keyboard=no' >> "$avd/config.ini"
+          log="$RUNNER_TEMP/openless-android-emulator.log"
+          emulator_pid=''
+          cleanup() {
+            status=$?
+            trap - EXIT
+            if [ -n "$emulator_pid" ]; then
+              if kill -0 "$emulator_pid" 2>/dev/null; then
+                timeout 10s adb -s emulator-5554 emu kill >/dev/null 2>&1 || true
+                kill "$emulator_pid" 2>/dev/null || true
+              fi
+              wait "$emulator_pid" 2>/dev/null || true
+            fi
+            if [ "$status" -ne 0 ]; then cat "$log" >&2 || true; fi
+            exit "$status"
+          }
+          trap cleanup EXIT
+          "$ANDROID_HOME/emulator/emulator" -avd openless-ci -port 5554 -no-window \
+            -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim > "$log" 2>&1 &
+          emulator_pid=$!
+          export ANDROID_SERIAL=emulator-5554
+          timeout 600s bash -c '
+            until [ "$(adb -s emulator-5554 shell getprop sys.boot_completed 2>/dev/null | tr -d "\r")" = 1 ]; do
+              kill -0 "$1" 2>/dev/null || exit 1
+              sleep 2
+            done
+          ' bash "$emulator_pid"
+          adb -s emulator-5554 shell input keyevent 82
+          for setting in window_animation_scale transition_animation_scale animator_duration_scale; do
+            adb -s emulator-5554 shell settings put global "$setting" 0
+          done
+          # Rime is staged for this emulator ABI; do not launch the Tauri Rust build.
+          src-tauri/gen/android/gradlew --project-dir src-tauri/gen/android \
+            :app:connectedX86_64DebugAndroidTest -x :app:rustBuildX86_64Debug --no-daemon
+
+      - name: Upload Android emulator failure log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-instrumentation-failure
+          path: ${{ runner.temp }}/openless-android-emulator.log
+          if-no-files-found: ignore
+
+  # HarmonyOS covers three layers, in three places:
+  #   * the Rust host is compiled and tested by the Linux job
+  #     (`cargo test --locked -p openless-harmony-host`);
+  #   * ArkTS cannot be compiled without the Huawei SDK, so this job checks what
+  #     is reproducible on a hosted runner: the committed IPC audit still matches
+  #     the code, the ArkTS contract tests pass, and the ArkWeb bundle builds;
+  #   * when `HARMONY_SDK_URL` is configured, the last step additionally builds a
+  #     real HAP, which is what actually type-checks the ArkTS sources.
+  harmony-check:
+    needs: [changes]
+    if: (github.event_name != 'workflow_dispatch' || inputs.platform != 'macos') && needs.changes.outputs.harmony != 'false'
+    name: Harmony (ArkTS contracts, Rust host, HAP)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: openless-all/app
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Cache npm from beta
+        uses: ./.github/actions/cache-npm
+      - run: npm ci
+      - name: Shared IPC audit matches the code
+        # The report is committed so the ArkTS coverage is reviewable; a stale
+        # report hides commands that the Harmony host does not implement yet.
+        run: |
+          node scripts/audit-harmony-ipc.mjs
+          git diff --exit-code harmony/ipc-audit.json
+      - name: Harmony ArkTS contracts
+        run: |
+          node scripts/harmony-entry-startup.test.mjs
+          node scripts/harmony-app-dictation.test.mjs
+          node scripts/harmony-voice-configuration.test.mjs
+          node scripts/harmony-panel-layout.test.mjs
+          node scripts/harmony-editor-compat.test.mjs
+          node scripts/harmony-clipboard-history.test.mjs
+          node scripts/harmony-symbol-gesture.test.mjs
+          node scripts/harmony-rime-startup.test.mjs
+      # The ArkWeb bundle is not built here: `package-harmony-hap.sh` ->
+      # `build-harmony-frontend.sh` runs the same
+      # `npm run build -- --base=./ --outDir=…`, so building it twice only
+      # doubled the vite pass.
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          # Tier-2 OHOS target; `rustup target list` above lists it for stable.
+          targets: aarch64-unknown-linux-ohos
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: 'openless-all/app -> target'
+          # The HAP embeds a release cdylib; keep its own key so the debug trees
+          # of the other jobs do not evict it.
+          key: harmony-host
+          save-if: ${{ github.ref == 'refs/heads/beta' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
+
+      # No toolchain cache. The download is 2.1 GB at ~100 MB/s plus ~70 s to
+      # unpack, while the extracted tree is 1.77 GB of the repository's 10 GB
+      # cache budget - and `actions/cache` wrote one copy per pull request
+      # scope. Downloading is both cheaper and shorter than restoring it.
+      - name: Build the HAP (compiles ArkTS and the Rust host)
+        env:
+          OPENLESS_HARMONY_CHANNEL: none
+        run: |
+          set -euo pipefail
+          bash scripts/prepare-harmony-sdk.sh
+          bash scripts/package-harmony-hap.sh
+          # AppGallery needs a numeric versionName, so the packaging script keeps
+          # only the numeric prefix ("2.0.2", not "2.0.2-Beta.1").
+          version_name=$(node -p "require('./package.json').version" | sed 's/[-+].*//')
+          version_code=$(cat linux-egui/package-revision)
+          bash scripts/verify-harmony-hap.sh \
+            target/harmony-packages/OpenLess_harmony_arm64.hap \
+            "${OPENLESS_HARMONY_TOOLCHAIN:-$HOME/.local/share/harmony/current}" \
+            "$version_name" "$version_code" --allow-unsigned
 
   # The Linux core/egui/deb+rpm checks live in a reusable workflow, which runs
   # the same `cargo test -p openless-core` as upstream's `linux-core-contract`
@@ -241,6 +500,94 @@ jobs:
     with:
       # 散文改动跳过整条 Linux 构建与打包链；输出缺失/未知时退回 full。
       scope: ${{ needs.changes.outputs.linux == 'false' && 'none' || 'full' }}
+
+  windows-frontend:
+    # Split out of `cross-platform`: the job used to serialise 6 minutes of
+    # frontend work behind 15 minutes of Rust compiling on the same runner, and
+    # the Windows runner is the slowest of the three. Running them in parallel
+    # costs one extra setup but removes ~6 minutes from the critical path.
+    needs: [changes]
+    if: (github.event_name != 'workflow_dispatch' || inputs.platform != 'macos') && needs.changes.outputs.tauri != 'false'
+    name: Windows frontend and contracts
+    runs-on: windows-latest
+    timeout-minutes: 40
+    env:
+      CARGO_PROFILE_TEST_DEBUG: 0
+    defaults:
+      run:
+        working-directory: openless-all/app
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Cache npm from beta
+        uses: ./.github/actions/cache-npm
+      - name: Install frontend dependencies
+        run: npm ci
+      - name: Check Windows prerequisites
+        shell: pwsh
+        run: ./scripts/windows-preflight.ps1 -Toolchain msvc
+      - name: Check PowerShell scripts
+        shell: pwsh
+        run: |
+          foreach ($script in @("./scripts/windows-preflight.ps1", "./scripts/windows-build-gnu.ps1", "./scripts/windows-runtime-smoke.ps1", "./scripts/prepare-windows-sherpa.ps1")) {
+            $errors = $null
+            [System.Management.Automation.PSParser]::Tokenize((Get-Content -Raw $script), [ref]$errors) | Out-Null
+            if ($errors) {
+              $errors | Format-List
+              exit 1
+            }
+          }
+      - name: Build frontend
+        run: npm run build
+      - name: Run the platform-sensitive contracts
+        # `process.platform` branches and the `windows-*` contracts only mean
+        # anything here; everything else runs on macOS (full suite) and Linux.
+        run: node scripts/frontend-test-runner.mjs --platform-only windows
+
+  native-capsule:
+    # The capsule crates compile into the desktop shells, so a break there would
+    # otherwise only surface inside the long Tauri matrix. They are checked on
+    # both desktop platforms inside this workflow rather than in a second
+    # workflow: one run per pull request, one `Changed areas` gate, one cache
+    # policy. Being a `push` job on the default branches is also what keeps the
+    # Rust cache warm - a pull-request-only workflow can never save a tree the
+    # next pull request is allowed to restore.
+    needs: [changes]
+    if: needs.changes.outputs.tauri != 'false'
+    name: Native capsule (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.platform == 'macos' && '["macos-latest"]' || '["macos-latest","windows-latest"]') }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: openless-all/app
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # Stable prefix per platform instead of the job name, so renaming or
+          # splitting the job keeps the tree.
+          shared-key: native-capsule
+          workspaces: openless-all/app -> target
+          # Pull requests restore the beta tree and never write their own copy:
+          # `refs/pull/<n>/merge` scopes are never restored again and only evict
+          # the branch caches (see docs/ci-trigger-and-cache-policy.md).
+          save-if: ${{ github.ref == 'refs/heads/beta' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
+      - run: cargo check --locked -p openless-native-capsule
+      - run: cargo test --locked -p openless-capsule --features ui,host
+      - run: cargo clippy --locked -p openless-native-capsule -p openless-capsule --features openless-capsule/ui,openless-capsule/host -- -D warnings
 
   cross-platform:
     needs: [changes]
@@ -272,8 +619,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-          cache: npm
-          cache-dependency-path: openless-all/app/package-lock.json
+      - name: Cache npm from beta
+        uses: ./.github/actions/cache-npm
 
       - uses: actions/setup-python@v5
         if: runner.os == 'Windows'
@@ -281,8 +628,10 @@ jobs:
           python-version: "3.x"
 
       # macOS MSRV is checked in a separate parallel job; Windows keeps the original check order.
-      - uses: dtolnay/rust-toolchain@1.88.0
-        if: runner.os == 'Windows'
+      # Same rule as the macOS MSRV job: a second toolchain is only worth the
+      # install + full rebuild while the declared MSRV is behind stable.
+      - uses: dtolnay/rust-toolchain@1.99.0
+        if: runner.os == 'Windows' && needs.changes.outputs.msrv_needed == 'true'
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -293,15 +642,21 @@ jobs:
       - uses: swatinem/rust-cache@v2
         if: runner.os == 'Windows'
         with:
+          # `shared-key` replaces the job name in the cache prefix, so the release
+          # workflow restoring the same key can reuse this tree. Keep the two in
+          # sync (scripts/ci-cache-sharing.test.mjs enforces it).
+          shared-key: tauri-windows
           workspaces: 'openless-all/app/src-tauri -> target'
-          save-if: ${{ github.event_name != 'pull_request' }}
+          save-if: ${{ github.ref == 'refs/heads/beta' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
 
       - name: Cache macOS stable dependencies
         if: runner.os == 'macOS'
         uses: swatinem/rust-cache@v2
         with:
-          key: macos-stable-v1
-          save-if: ${{ github.event_name != 'pull_request' }}
+          # Same prefix as `release-tauri.yml`, which is what lets a tag build
+          # restore the baseline branch's dependency tree instead of a cold one.
+          shared-key: tauri-macos
+          save-if: ${{ github.ref == 'refs/heads/beta' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
           workspaces: |
             openless-all/app -> target
             openless-all/app/src-tauri -> target
@@ -313,11 +668,6 @@ jobs:
 
       - name: Install frontend dependencies
         run: npm ci
-
-      - name: Check Windows prerequisites
-        if: matrix.preflight
-        shell: pwsh
-        run: ./scripts/windows-preflight.ps1 -Toolchain msvc
 
       - name: Check PowerShell scripts
         if: matrix.preflight
@@ -332,8 +682,23 @@ jobs:
             }
           }
 
+      - name: Build the frontend for the Tauri context
+        # `tauri::generate_context!()` embeds `../dist` at compile time, so the
+        # Rust compile below needs the frontend built even on Windows, where the
+        # contract suite runs in its own job.
+        if: runner.os == 'Windows'
+        run: npm run build
+
       - name: Build frontend and run frontend/contract tests
+        # Windows runs the platform-sensitive subset in its own job: spawning 144
+        # node processes there costs ~3x the macOS time, and the rest of the suite
+        # is already covered here. The frontend build it needs is the step above.
+        if: runner.os == 'macOS'
         run: npm test
+
+      # Direct Cargo checks do not execute Tauri beforeBuildCommand.
+      - name: Build native capsule for Tauri checks
+        run: npm run build:native-capsule:dev
 
       - name: Install pinned Codex CLI for sandbox contract
         if: runner.os == 'macOS'
@@ -354,10 +719,6 @@ jobs:
           OPENLESS_CODEX_TEST_EXE: codex
         run: cargo test --locked -p openless-core hardening_actually_narrows_the_writable_roots -- --ignored --nocapture --test-threads=1
 
-      - name: Check Tauri backend (cargo check)
-        if: runner.os == 'Windows'
-        run: cargo check --locked --manifest-path src-tauri/Cargo.toml
-
       # test compiles and runs lib/bin, covering the production binary paths that plain cargo
       # check misses. Avoids a metadata-only check followed by another codegen pass over the same
       # dependency graph.
@@ -371,7 +732,10 @@ jobs:
         # the cfg/link coverage here; the shared Core's public compatibility contract is actually
         # executed in the next step.
         if: runner.os == 'Windows'
-        run: cargo test --locked --manifest-path src-tauri/Cargo.toml --lib --no-run
+        # `--bins` keeps the binary coverage that the removed `cargo check` used to
+        # provide: `cargo check` writes metadata, so the following codegen pass
+        # recompiled the whole dependency graph anyway (measured: 6.4 min of it).
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml --lib --bins --no-run
 
       - name: Run Rust-only backend unit tests (Windows)
         # The standalone test crate does not link the full Tauri app lib; it verifies the public
@@ -385,13 +749,26 @@ jobs:
         if: runner.os == 'Windows'
         run: python scripts/test-recorder-module.py
 
-      - name: Check Tauri backend with Rust 1.88 MSRV
-        if: runner.os == 'Windows'
-        run: cargo +1.88.0 check --locked --manifest-path src-tauri/Cargo.toml
+      - name: Check Tauri backend with Rust 1.99 MSRV
+        if: runner.os == 'Windows' && needs.changes.outputs.msrv_needed == 'true'
+        run: cargo +1.99.0 check --locked --manifest-path src-tauri/Cargo.toml
 
-      - name: Compile backend tests with Rust 1.88 MSRV
+      - name: Compile backend tests with Rust 1.99 MSRV
+        if: runner.os == 'Windows' && needs.changes.outputs.msrv_needed == 'true'
+        run: cargo +1.99.0 test --locked --manifest-path src-tauri/backend-tests/Cargo.toml --no-run
+
+      - name: Build the Windows TSF input method
+        # The TSF DLL has its own vcxproj and is not part of the Tauri build, so
+        # nothing else in CI ever compiles it. A compile error here would
+        # otherwise only surface on a Windows machine with Visual Studio.
         if: runner.os == 'Windows'
-        run: cargo +1.88.0 test --locked --manifest-path src-tauri/backend-tests/Cargo.toml --no-run
+        uses: microsoft/setup-msbuild@v2
+        with:
+          msbuild-version: '17.x'
+      - name: Compile the TSF IME (x64, Release)
+        if: runner.os == 'Windows'
+        working-directory: openless-all/app/windows-ime
+        run: msbuild OpenLessIme.sln /p:Configuration=Release /p:Platform=x64 /m /v:minimal
 
       - name: Verify version sync across all 5 files
         # Runs on both platforms: the Windows runner ships git-bash, giving consistent behavior
@@ -425,9 +802,9 @@ jobs:
 
   macos-msrv:
     needs: [changes]
-    # 失败即运行：只有判定脚本明确说“够不到”才跳过。
+    # Run the declared minimum toolchain even when stable has the same version.
     if: needs.changes.outputs.msrv != 'false'
-    name: macOS Rust 1.88 MSRV
+    name: macOS Rust 1.99 MSRV
     runs-on: macos-latest
     timeout-minutes: 60
     env:
@@ -445,19 +822,21 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-          cache: npm
-          cache-dependency-path: openless-all/app/package-lock.json
-      - uses: dtolnay/rust-toolchain@1.88.0
+      - name: Cache npm from beta
+        uses: ./.github/actions/cache-npm
+      - uses: dtolnay/rust-toolchain@1.99.0
       - uses: swatinem/rust-cache@v2
         with:
           key: macos-msrv-v1
-          save-if: ${{ github.event_name != 'pull_request' }}
+          save-if: ${{ github.ref == 'refs/heads/beta' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
           workspaces: |
             openless-all/app/src-tauri -> target
             openless-all/app/src-tauri/backend-tests -> target
       - run: npm ci
       - run: npm run build
-      - name: Check Tauri backend with Rust 1.88 MSRV
-        run: cargo +1.88.0 check --locked --manifest-path src-tauri/Cargo.toml --timings
-      - name: Compile backend tests with Rust 1.88 MSRV
-        run: cargo +1.88.0 test --locked --manifest-path src-tauri/backend-tests/Cargo.toml --no-run --timings
+      - name: Build native capsule for Tauri checks
+        run: npm run build:native-capsule:dev
+      - name: Check Tauri backend with Rust 1.99 MSRV
+        run: cargo +1.99.0 check --locked --manifest-path src-tauri/Cargo.toml --timings
+      - name: Compile backend tests with Rust 1.99 MSRV
+        run: cargo +1.99.0 test --locked --manifest-path src-tauri/backend-tests/Cargo.toml --no-run --timings

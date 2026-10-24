@@ -13,6 +13,8 @@ import { LocalModelMetadataCache } from '../../lib/localModelMetadataCache';
 import type { LocalAsrRemoteInfo, SherpaOnnxRemoteInfo } from '../../lib/localAsr';
 import { restartApp } from '../../lib/ipc/permissions';
 import { isTauri } from '../../lib/ipc';
+import { getCredentials } from '../../lib/ipc/asr-credentials';
+import type { CredentialsStatus } from '../../lib/types';
 import { emitSaved } from '../../lib/savedEvent';
 import { useLayoutStack } from '../../lib/useMobileLayout';
 import {
@@ -116,6 +118,9 @@ import type { RemoteSize } from './types';
 const OS = detectOS();
 const IS_WINDOWS = OS === 'win';
 const IS_QWEN_PLATFORM = OS === 'mac';
+// sherpa-onnx models: Windows and arm64 Android (this page only shows where
+// the backend reports local ASR support). Foundry stays Windows-only.
+const IS_SHERPA_PLATFORM = IS_WINDOWS || OS === 'android';
 
 function effectiveModelMirror(modelId: string, mirror: string): LocalAsrMirror {
   if (mirror === 'modelscope' && !modelId.startsWith('qwen3-asr-')) return 'huggingface';
@@ -187,6 +192,46 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
   }));
   const stackLayout = useLayoutStack(1000);
   const { prefs, updatePrefs } = useHotkeySettings();
+  // The selected channel owns routing. Preferences only remember local model
+  // configuration and may still contain a legacy provider after switching away.
+  const [activeAsrProvider, setResolvedAsrProvider] = useState<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    let revision = 0;
+    let unlisten: (() => void) | undefined;
+    const refreshActive = async () => {
+      const requestedRevision = revision;
+      try {
+        const status = await getCredentials();
+        if (!cancelled && requestedRevision === revision) {
+          setResolvedAsrProvider(status.activeAsrProvider);
+        }
+      } catch {
+        if (!cancelled && requestedRevision === revision) setResolvedAsrProvider(null);
+      }
+    };
+    void (async () => {
+      if (isTauri) {
+        const { listen } = await import('@tauri-apps/api/event');
+        const off = await listen<CredentialsStatus>('credentials:changed', ({ payload }) => {
+          revision += 1;
+          if (!cancelled) setResolvedAsrProvider(payload.activeAsrProvider);
+        });
+        if (cancelled) {
+          off();
+          return;
+        }
+        unlisten = off;
+      }
+      await refreshActive();
+    })().catch(() => {
+      if (!cancelled) setResolvedAsrProvider(null);
+    });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
   const [settings, setSettings] = useState<LocalAsrSettings | null>(null);
   // Wait for the native capability query so Intel Macs never flash the MLX channel first.
   const [supportsQwen3Mlx, setSupportsQwen3Mlx] = useState(false);
@@ -493,6 +538,8 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
         void refreshFoundryStatus();
         void refreshFoundryCatalog();
         void refreshFoundryModelDir(selectedFoundryAlias);
+      }
+      if (IS_SHERPA_PLATFORM) {
         void refreshSherpaStatus();
         void refreshSherpaCatalog();
         void refreshSherpaModelDir(selectedSherpaAlias);
@@ -627,12 +674,19 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
   // restarts automatically when the dialog closes (the effect keyed on downloadDialogOpen rebuilds the interval).
   useEffect(() => {
     if (downloadDialogOpen) return;
+    // Skip ticks while the window is hidden; catch up immediately once it becomes visible again.
     const pollTimer = window.setInterval(() => {
+      if (document.hidden) return;
       void refresh();
     }, 3000);
+    const onVisible = () => {
+      if (!document.hidden) void refresh();
+    };
+    document.addEventListener('visibilitychange', onVisible);
     return () => {
       refreshGenerationRef.current += 1;
       window.clearInterval(pollTimer);
+      document.removeEventListener('visibilitychange', onVisible);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [downloadDialogOpen]);
@@ -769,7 +823,7 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
   }, []);
 
   useEffect(() => {
-    if (!isTauri || !IS_WINDOWS) return;
+    if (!isTauri || !IS_SHERPA_PLATFORM) return;
     let unlisten: undefined | (() => void);
     let cancelled = false;
     (async () => {
@@ -800,7 +854,7 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
   }, []);
 
   useEffect(() => {
-    if (!isTauri || !IS_WINDOWS) return;
+    if (!isTauri || !IS_SHERPA_PLATFORM) return;
     let unlisten: undefined | (() => void);
     let cancelled = false;
     (async () => {
@@ -1198,12 +1252,13 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
     }
   };
 
-  const handleRevealSherpaDir = async () => {
+  const handleRevealSherpaDir = async (aliasOverride?: SherpaOnnxModelAlias) => {
+    const alias = aliasOverride ?? selectedSherpaAlias;
     setSherpaBusy('reveal');
     try {
       setError(null);
-      await revealSherpaOnnxAsrModelDir(selectedSherpaAlias);
-      await refreshSherpaModelDir(selectedSherpaAlias);
+      await revealSherpaOnnxAsrModelDir(alias);
+      await refreshSherpaModelDir(alias);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -1461,7 +1516,7 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
   // the built-in audio test, so Qwen3 and Whisper can be compared for load/transcribe latency on one page.
   const handleTest = async (
     modelId: string,
-    provider: 'local-qwen3-mlx' | 'local-qwen3-c' | 'local-whisper' = prefs?.activeAsrProvider ===
+    provider: 'local-qwen3-mlx' | 'local-qwen3-c' | 'local-whisper' = activeAsrProvider ===
     'local-qwen3-c'
       ? 'local-qwen3-c'
       : supportsQwen3Mlx
@@ -1518,7 +1573,7 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
   const foundryAvailable =
     foundryStatus?.available === true ||
     (foundryPlatformAvailable && foundryStatus?.available !== false);
-  const foundryDefault = prefs?.activeAsrProvider === 'foundry-local-whisper';
+  const foundryDefault = activeAsrProvider === 'foundry-local-whisper';
   const selectedFoundryModel =
     FOUNDRY_LOCAL_ASR_MODELS.find((model) => model.alias === selectedFoundryAlias) ??
     FOUNDRY_LOCAL_ASR_MODELS[0];
@@ -1551,7 +1606,7 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
   const sherpaAvailable =
     sherpaStatus?.available === true ||
     (foundryPlatformAvailable && sherpaStatus?.available !== false);
-  const sherpaDefault = prefs?.activeAsrProvider === 'sherpa-onnx-local';
+  const sherpaDefault = activeAsrProvider === 'sherpa-onnx-local';
   const selectedSherpaModel =
     SHERPA_ONNX_ASR_MODELS.find((model) => model.alias === selectedSherpaAlias) ??
     SHERPA_ONNX_ASR_MODELS[0];
@@ -1704,9 +1759,9 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
         isActive:
           settings?.activeModel === m.id &&
           (isWhisper
-            ? prefs?.activeAsrProvider === 'local-whisper'
+            ? activeAsrProvider === 'local-whisper'
             : ['local-qwen3', 'local-qwen3-mlx', 'local-qwen3-c'].includes(
-                prefs?.activeAsrProvider ?? '',
+                activeAsrProvider ?? '',
               )),
         engine: isWhisper ? 'whisper' : 'qwen3',
         runtimeLabel: isWhisper
@@ -1721,7 +1776,7 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
       });
     }
     // Windows：sherpa-onnx + foundry
-    for (const c of IS_WINDOWS ? sherpaCatalog : []) {
+    for (const c of IS_SHERPA_PLATFORM ? sherpaCatalog : []) {
       const isDownloading =
         Boolean(sherpaDownloadProgress[c.alias]) &&
         (sherpaDownloadProgress[c.alias]?.phase === 'started' ||
@@ -1744,9 +1799,9 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
             : null
           : null,
         isActive:
-          sherpaStatus?.activeModel === c.alias && prefs?.activeAsrProvider === 'sherpa-onnx-local',
+          sherpaStatus?.activeModel === c.alias && activeAsrProvider === 'sherpa-onnx-local',
         engine: 'sherpa',
-        runtimeLabel: 'Windows · sherpa-onnx',
+        runtimeLabel: OS === 'android' ? 'Android · sherpa-onnx' : 'Windows · sherpa-onnx',
         downloadError:
           sherpaDownloadProgress[c.alias]?.phase === 'failed'
             ? sherpaDownloadProgress[c.alias]?.error || t('localAsr.failed')
@@ -1771,8 +1826,7 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
         isDownloading,
         percent: isDownloading && foundryProgress?.percent != null ? foundryProgress.percent : null,
         isActive:
-          foundryStatus?.activeModel === c.alias &&
-          prefs?.activeAsrProvider === 'foundry-local-whisper',
+          foundryStatus?.activeModel === c.alias && activeAsrProvider === 'foundry-local-whisper',
         engine: 'foundry',
         runtimeLabel: 'Windows · Foundry Local',
       });
@@ -1784,7 +1838,7 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
     remoteSizes,
     progress,
     settings?.activeModel,
-    prefs?.activeAsrProvider,
+    activeAsrProvider,
     sherpaCatalog,
     sherpaRemoteSizes,
     sherpaDownloadProgress,
@@ -1857,6 +1911,8 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
       } else if (action === 'delete') {
         setSelectedSherpaAlias(alias);
         window.setTimeout(() => void handleDeleteSherpa(alias), 0);
+      } else if (action === 'reveal') {
+        void handleRevealSherpaDir(alias);
       }
     } else if (entry.engine === 'foundry') {
       const alias = entry.id as FoundryLocalAsrModelAlias;
@@ -2013,6 +2069,7 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
                     }}
                     onDelete={() => selectedEntry && dispatchEntryAction(selectedEntry, 'delete')}
                     onReveal={() => selectedEntry && dispatchEntryAction(selectedEntry, 'reveal')}
+                    showReveal={!(OS === 'android' && selectedEntry?.engine === 'sherpa')}
                     onCleanup={
                       selectedEntry &&
                       (selectedEntry.engine === 'qwen3' || selectedEntry.engine === 'whisper') &&
@@ -2382,6 +2439,23 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
           }}
           onStart={startDownloadFromDialog}
           onClose={() => setDownloadDialog(false)}
+          // The settings-section mirror picker below is macOS-only; everywhere
+          // else this is the only way to leave HuggingFace, which is often
+          // unreachable (mainland China). Sherpa models have no ModelScope copy.
+          mirror={{
+            label: t('localAsr.mirrorLabel'),
+            value: IS_QWEN_PLATFORM
+              ? (settings?.mirror ?? 'huggingface')
+              : effectiveSherpaMirror(settings?.mirror ?? 'huggingface'),
+            options: [
+              { value: 'huggingface', label: t('localAsr.mirrorHuggingface') },
+              { value: 'hf-mirror', label: t('localAsr.mirrorHfMirror') },
+              ...(IS_QWEN_PLATFORM
+                ? [{ value: 'modelscope', label: t('localAsr.mirrorModelscope') }]
+                : []),
+            ],
+            onChange: (value) => void handleMirrorChange(value),
+          }}
         />
       )}
 

@@ -8,6 +8,7 @@ use crate::audio::AudioProcessingConfig;
 use crate::dictation_context::DictationContext;
 use crate::errors::{BackendError, BackendErrorCode};
 use crate::types::{InsertStatus, PolishDelta, SessionId, TranscriptDelta};
+use crate::voice_activation::{VoiceActivationConfig, VoiceActivationSignal};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HostAction {
@@ -70,6 +71,85 @@ pub struct NoopHostActions;
 impl HostActions for NoopHostActions {
     fn request(&self, _action: HostAction) -> Result<(), BackendError> {
         Ok(())
+    }
+}
+
+/// Host-owned sink for semantic voice activation signals. Standby recognition
+/// must only publish wake/finish commands and runtime state; it must never
+/// publish the recognized standby text as a normal transcript delta.
+pub trait VoiceActivationSink: Send + Sync {
+    fn publish(&self, signal: VoiceActivationSignal) -> Result<(), BackendError>;
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VoiceActivationError {
+    Unsupported,
+    ModelMissing,
+    PermissionDenied,
+    MicBusy,
+    InvalidConfig(String),
+    Runtime(String),
+}
+
+impl std::fmt::Display for VoiceActivationError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Unsupported => formatter.write_str("voice activation is unsupported"),
+            Self::ModelMissing => formatter.write_str("voice activation model is not installed"),
+            Self::PermissionDenied => formatter.write_str("microphone permission was denied"),
+            Self::MicBusy => formatter.write_str("microphone is already in use"),
+            Self::InvalidConfig(message) | Self::Runtime(message) => formatter.write_str(message),
+        }
+    }
+}
+
+impl std::error::Error for VoiceActivationError {}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VoiceDictationHandoffRequest {
+    pub activation_generation: u64,
+}
+
+pub struct VoiceDictationHandoff {
+    pub capture: Box<dyn PendingAudioCapture>,
+}
+
+/// A single host-owned microphone/runtime seam for voice activation. The Core
+/// decides lifecycle and stale-event policy; the host decides how local ASR and
+/// the native capture stream are implemented.
+pub trait VoiceActivationRuntime: Send + Sync + 'static {
+    fn configure(
+        &self,
+        config: VoiceActivationConfig,
+        sink: Arc<dyn VoiceActivationSink>,
+    ) -> BoxFuture<'static, Result<Box<dyn VoiceActivationHandle>, VoiceActivationError>>;
+}
+
+pub trait VoiceActivationHandle: Send + Sync {
+    /// Bind the Core-owned dictation session so finish signals can carry the
+    /// same session identity even though the host performs recognition.
+    fn bind_dictation_session(&self, _session_id: SessionId) {}
+
+    fn handoff_to_dictation(
+        &self,
+        request: VoiceDictationHandoffRequest,
+    ) -> BoxFuture<'static, Result<VoiceDictationHandoff, VoiceActivationError>>;
+
+    fn stop(
+        &self,
+        reason: crate::voice_activation::VoiceActivationStopReason,
+    ) -> BoxFuture<'static, Result<(), VoiceActivationError>>;
+}
+
+pub struct UnsupportedVoiceActivationRuntime;
+
+impl VoiceActivationRuntime for UnsupportedVoiceActivationRuntime {
+    fn configure(
+        &self,
+        _config: VoiceActivationConfig,
+        _sink: Arc<dyn VoiceActivationSink>,
+    ) -> BoxFuture<'static, Result<Box<dyn VoiceActivationHandle>, VoiceActivationError>> {
+        Box::pin(async { Err(VoiceActivationError::Unsupported) })
     }
 }
 
@@ -202,6 +282,8 @@ pub enum EngineStage {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum EngineProgress {
+    /// The recorder is registered; provider preparation may still be pending.
+    CaptureReady,
     RecordingLevel { elapsed_ms: u64, level: f32 },
     RecordingLimitReached,
     RecordingFault(BackendError),
@@ -261,6 +343,12 @@ pub trait DictationEngine: Send + Sync + 'static {
         session_id: SessionId,
         progress: std::sync::Arc<dyn EngineProgressSink>,
     ) -> BoxFuture<'static, Result<EngineResult, EngineFailure>>;
+
+    /// Retain an early stop request, preserving PCM and stop errors for finish().
+    /// Returns false until the session is registered, or for legacy engines.
+    fn stop_recording(&self, _session_id: SessionId) -> BoxFuture<'static, Result<bool, BackendError>> {
+        Box::pin(async { Ok(false) })
+    }
 
     /// Replace the immutable session snapshot before finalization when a host
     /// action (currently Android's finish-and-translate gesture) is only known
@@ -381,6 +469,13 @@ pub trait DictationEngine: Send + Sync + 'static {
             BackendErrorCode::Unsupported,
             "dictation engine does not support external audio",
         ))
+    }
+
+    /// Retain an existing archive during fault cleanup. Availability must be
+    /// checked after cancellation has drained the recorder. This never enables
+    /// recording storage for a session whose policy did not already allow it.
+    fn retain_failed_recording(&self, _session_id: SessionId) -> Option<Arc<dyn RecordingArchive>> {
+        None
     }
 
     fn cancel(&self, session_id: SessionId) -> BoxFuture<'static, Result<(), BackendError>>;
@@ -721,6 +816,18 @@ pub trait TextInsertionSession: Send + Sync {
     }
 
     fn write(&self, text: String) -> BoxFuture<'static, Result<InsertWriteResult, BackendError>>;
+    /// Shows the transcript so far as an in-place composition (underlined, not yet
+    /// committed) in the target document. Each call replaces the previous one; the
+    /// final text still arrives through `finish`, which replaces the composition.
+    fn update_composition(&self, text: String) -> BoxFuture<'static, Result<(), BackendError>> {
+        let _ = text;
+        Box::pin(async {
+            Err(BackendError::new(
+                BackendErrorCode::Unsupported,
+                "composition display is unavailable on this platform",
+            ))
+        })
+    }
     fn copy(&self, text: String) -> BoxFuture<'static, Result<(), BackendError>>;
     fn finish(&self, final_text: String)
         -> BoxFuture<'static, Result<InsertOutcome, BackendError>>;

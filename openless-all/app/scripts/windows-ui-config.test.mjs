@@ -48,6 +48,30 @@ const tauriEventsRs = await readFile(
   new URL('../src-tauri/src/tauri_events.rs', import.meta.url),
   'utf-8',
 );
+const captureForegroundMonitor =
+  coordinatorRs.match(/fn capture_foreground_monitor\b[\s\S]*?\n    }/)?.[0] ?? '';
+assertMatch(
+  captureForegroundMonitor,
+  /\.is_panel_visible\(\)[\s\S]*?\.then\(\|\| self\.qa_context\.external_focus_target\(\)\)[\s\S]*?\.or_else\(crate::coordinator::capture_focus_target\)[\s\S]*?monitor_rect_for_hwnd/,
+  'foreground display targeting must retain QA provenance and accept OpenLess foreground windows',
+);
+const prepareDisplayTarget =
+  coordinatorRs.match(/fn prepare_display_target\b[\s\S]*?\n    }/)?.[0] ?? '';
+assertMatch(
+  prepareDisplayTarget,
+  /CapsuleState::Recording[\s\S]*?CapsuleDisplayMode::ForegroundWindowScreen[\s\S]*?!self\.state\.foreground_target_matches_session\(session_id\)[\s\S]*?self\.capture_foreground_monitor\(\)[\s\S]*?begin_foreground_target_capture\(session_id, monitor\)/,
+  'WebView capsules must capture the shared foreground target once per recording session',
+);
+const nativeCapsuleRs = await readFile(
+  new URL('../src-tauri/src/native_capsule.rs', import.meta.url),
+  'utf-8',
+);
+const nativeRefreshLayout = nativeCapsuleRs.match(/fn refresh_layout\b[\s\S]*?\n    }/)?.[0] ?? '';
+assertMatch(
+  nativeRefreshLayout,
+  /CapsuleDisplayMode::ForegroundWindowScreen[\s\S]*?!latest\.foreground_captured[\s\S]*?frame\.state\.phase == "recording"[\s\S]*?capsule\.capture_foreground_monitor\(\)[\s\S]*?latest\.foreground_captured = true/,
+  'low-memory capsules must capture the same foreground target once per recording session',
+);
 const capsuleTsx = await readFile(
   new URL('../src/components/Capsule.tsx', import.meta.url),
   'utf-8',
@@ -60,8 +84,8 @@ const capsuleStylesCss = await readFile(
   new URL('../src/components/CapsuleStyles.css', import.meta.url),
   'utf-8',
 );
-const typelessTsx = await readFile(
-  new URL('../src/components/TypelessCapsule.tsx', import.meta.url),
+const defaultCapsuleTsx = await readFile(
+  new URL('../src/components/OpenLessCapsule.tsx', import.meta.url),
   'utf-8',
 );
 const liveTranscriptTsx = await readFile(
@@ -167,7 +191,9 @@ assertMatch(
 
 const tokensCss = await readFile(new URL('../src/styles/tokens.css', import.meta.url), 'utf-8');
 
-if (!/os === 'win' \|\| os === 'android' \? 0 : 14/.test(windowChromeTsx)) {
+if (
+  !/os === 'win' \|\| os === 'android'(?: \|\| os === 'harmony')? \? 0 : 14/.test(windowChromeTsx)
+) {
   throw new Error(
     'windows main shell should rely on native decorations instead of a frameless chrome shell',
   );
@@ -310,14 +336,14 @@ assertMatch(
   'Classic translation badge and external rail should use one explicit geometry model',
 );
 assertMatch(
-  capsuleTsx,
-  /case 'recording':[\s\S]*?AudioBars[\s\S]*?case 'transcribing':[\s\S]*?case 'polishing':[\s\S]*?cap-state-enter[\s\S]*?AudioBars[\s\S]*?cap-shine[\s\S]*?getClassicProcessingLabel\(operating\)/,
-  'Classic recording/transcribing/polishing should render waveform bars and preserve thinking/using text',
+  defaultCapsuleTsx,
+  /const processing = state === 'transcribing' \|\| state === 'polishing'[\s\S]*?capsule\.using[\s\S]*?capsule\.thinking[\s\S]*?<CapsuleWaveform/,
+  'OpenLess recording keeps waveform feedback and processing keeps thinking/using text',
 );
 assertMatch(
-  capsuleTsx,
-  /const cancelEnabled = state === 'recording' \|\| state === 'transcribing' \|\| state === 'polishing'/,
-  'Classic cancel should remain available during recording and both processing states',
+  defaultCapsuleTsx,
+  /className="ol-default-action ol-default-cancel"[\s\S]*?onClick=\{onCancel\}[\s\S]*?processing &&[\s\S]*?ol-default-processing-cancel[\s\S]*?onClick=\{onCancel\}/,
+  'OpenLess cancel should remain available during recording and both processing states',
 );
 assertMatch(
   capsuleTsx,
@@ -325,9 +351,9 @@ assertMatch(
   'Classic external rail should use the shared badge/body geometry instead of bypassing offset',
 );
 assertMatch(
-  typelessTsx,
-  /<div className="ol-typeless-translation-row">[\s\S]*?ol-typeless-translation[\s\S]*?<div className="ol-typeless-capsule-stage">/,
-  'typeless translation should occupy its own layout row between the rail and capsule',
+  capsuleLayoutTs,
+  /value === 'typeless'\) return 'classic'/,
+  'legacy Typeless preferences and events must resolve to the OpenLess default',
 );
 assertMatch(
   capsuleStylesCss,
@@ -507,7 +533,7 @@ assertMatch(
 );
 assertMatch(
   coordinatorRs,
-  /if let Err\(error\) = unsafe \{[\s\S]*?SetWindowPos\([\s\S]*?return false/,
+  /fn set_capsule_window_topmost_no_activate[\s\S]*?let position_result = if show[\s\S]*?SetWindowPos\([\s\S]*?if let Err\(error\) = position_result[\s\S]*?return false/,
   'no-activate display should return false when SetWindowPos fails',
 );
 assertMatch(

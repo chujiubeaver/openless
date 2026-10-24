@@ -212,6 +212,8 @@ fn is_builtin_llm_provider(provider_id: &str) -> bool {
 
 #[derive(Debug, Error)]
 pub enum LLMError {
+    #[error("{0}")]
+    Siwc(crate::siwc::SiwcError),
     #[error("missing credentials")]
     MissingCredentials,
     #[error("network error: {0}")]
@@ -518,6 +520,7 @@ impl ActiveLLMProvider {
 
 pub struct OpenAICompatibleLLMProvider {
     config: OpenAICompatibleConfig,
+    siwc_access: Option<std::sync::Arc<crate::siwc::SiwcAccess>>,
     dictation_session_id: Option<crate::types::SessionId>,
     /// Polish-dedicated client: no input-length-dependent whole-request timeout, only a
     /// connection-leak hard cap. The real criteria live at call sites (streaming two
@@ -548,8 +551,14 @@ impl OpenAICompatibleLLMProvider {
         Self {
             config,
             dictation_session_id: None,
+            siwc_access: None,
             polish_client,
         }
+    }
+
+    pub(crate) fn with_siwc_access(mut self, access: crate::siwc::SiwcAccess) -> Self {
+        self.siwc_access = Some(std::sync::Arc::new(access));
+        self
     }
 
     pub(crate) fn set_dictation_session(&mut self, session_id: crate::types::SessionId) {
@@ -859,6 +868,23 @@ impl OpenAICompatibleLLMProvider {
         body: &serde_json::Value,
         budget: Duration,
     ) -> Result<String, LLMError> {
+        if let Some(access) = &self.siwc_access {
+            return tokio::time::timeout(
+                budget,
+                access.infer(
+                    body,
+                    StreamingTimeouts {
+                        first_token: budget,
+                        idle: budget,
+                    },
+                    |_| {},
+                    || false,
+                ),
+            )
+            .await
+            .map_err(|_| LLMError::Timeout)?
+            .map(|text| clean_polish_output(&text));
+        }
         let request_id = uuid::Uuid::new_v4();
         log::info!(
             "[llm] request_id={} session_id={} stream=false",
@@ -982,6 +1008,16 @@ impl OpenAICompatibleLLMProvider {
         F: Fn(&str) + Send + Sync,
         C: Fn() -> bool + Send + Sync,
     {
+        if let Some(access) = &self.siwc_access {
+            return access
+                .infer(
+                    &self.chat_body(true, messages),
+                    timeouts,
+                    on_delta,
+                    should_cancel,
+                )
+                .await;
+        }
         if should_cancel() {
             return Err(LLMError::Network("cancelled".into()));
         }
@@ -1994,6 +2030,16 @@ pub(crate) fn apply_openai_compatible_thinking_control(
                 body["reasoning"] = json!({ "type": "disabled" });
             }
         }
+        // Volcengine Ark (Doubao Seed) Chat Completions accepts the official `thinking`
+        // field: `disabled` turns thinking off, `enabled` turns it on (omitting it keeps
+        // the model default; Seed 2.x models default to thinking on, which adds seconds
+        // of TTFT to dictation polish). Same schema and literals as DeepSeekThinking —
+        // a separate variant keeps channel defaults independent.
+        Some(ThinkingControl::VolcengineThinking) => {
+            body["thinking"] = json!({
+                "type": if thinking_enabled { "enabled" } else { "disabled" },
+            });
+        }
         None => {}
     }
 }
@@ -2031,12 +2077,15 @@ pub(crate) enum ThinkingControl {
     DeepSeekThinking,
     MiniMaxThinking,
     LmStudioThinking,
+    VolcengineThinking,
 }
 
 pub(crate) fn openai_compatible_thinking_control(provider_id: &str) -> Option<ThinkingControl> {
     match provider_id.trim() {
         "lmstudio" => Some(ThinkingControl::LmStudioThinking),
         "deepseek" => Some(ThinkingControl::DeepSeekThinking),
+        // Volcengine Ark (Doubao Seed) — preset id is `ark` (ProvidersSection.tsx).
+        "ark" | "volcengine" => Some(ThinkingControl::VolcengineThinking),
         // provider_id preset (see ProvidersSection.tsx::LLM_PRESETS).
         "minimax" => Some(ThinkingControl::MiniMaxThinking),
         "openrouterFree" => Some(ThinkingControl::OpenRouterReasoning),
@@ -2079,6 +2128,11 @@ pub(crate) fn openai_compatible_thinking_control_for_base_url(
     }
     if host.contains("deepseek") {
         return Some(ThinkingControl::DeepSeekThinking);
+    }
+    // Ark (ark.cn-beijing.volces.com) and BytePlus ModelArk (bytepluses.com) run the
+    // same Doubao Seed API with the same `thinking` field.
+    if host.contains("volces") || host.contains("bytepluses") {
+        return Some(ThinkingControl::VolcengineThinking);
     }
     if host.contains("openrouter") {
         return Some(ThinkingControl::OpenRouterReasoning);
@@ -3589,6 +3643,49 @@ mod tests {
             let body = provider.chat_body(false, vec![json!({ "role": "user", "content": "hi" })]);
 
             assert_eq!(body["reasoning_effort"], expected);
+        }
+    }
+
+    #[test]
+    fn ark_chat_body_maps_thinking_toggle_to_thinking_type() {
+        for (enabled, expected) in [(false, "disabled"), (true, "enabled")] {
+            let provider = OpenAICompatibleLLMProvider::new(
+                OpenAICompatibleConfig::new(
+                    "ark",
+                    "Volcengine Ark",
+                    "https://ark.cn-beijing.volces.com/api/v3",
+                    "k",
+                    "doubao-seed-2-1-lite-260915",
+                )
+                .with_thinking_enabled(enabled),
+            );
+
+            let body = provider.chat_body(false, vec![json!({ "role": "user", "content": "hi" })]);
+
+            assert_eq!(body["thinking"]["type"], expected);
+        }
+    }
+
+    #[test]
+    fn custom_provider_on_volcengine_host_gets_thinking_control() {
+        for base_url in [
+            "https://ark.cn-beijing.volces.com/api/v3",
+            "https://ark.ap-southeast.bytepluses.com/api/v3",
+        ] {
+            let provider = OpenAICompatibleLLMProvider::new(
+                OpenAICompatibleConfig::new(
+                    "custom",
+                    "Custom",
+                    base_url,
+                    "k",
+                    "doubao-seed-2-0-mini-260428",
+                )
+                .with_thinking_enabled(false),
+            );
+
+            let body = provider.chat_body(false, vec![json!({ "role": "user", "content": "hi" })]);
+
+            assert_eq!(body["thinking"]["type"], "disabled", "{base_url}");
         }
     }
 

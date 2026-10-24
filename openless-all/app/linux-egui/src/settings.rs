@@ -9,7 +9,8 @@ use openless_core::{
 
 use crate::LinuxCredentialStore;
 
-/// Render legacy modifier names as the keys registered on Linux.
+/// Linux 上实际注册的是 X11 keysym，而不是 macOS 的「Option」命名：界面上显示
+/// `RightOption` 会与「按下右 Alt」对不上，所以把旧名换成实际按键名。
 pub fn shortcut_display_label(binding: &ShortcutBinding) -> String {
     let primary = match legacy_modifier_trigger(binding) {
         Some(HotkeyTrigger::RightOption | HotkeyTrigger::RightAlt) => "Right Alt",
@@ -466,10 +467,15 @@ fn binding_to_fcitx_key(binding: &ShortcutBinding) -> String {
 
 fn normalize_fcitx_primary(primary: &str) -> String {
     let trimmed = primary.trim();
-    if let Some(stripped) = trimmed.strip_prefix("Key") {
-        stripped.to_ascii_lowercase()
-    } else {
-        trimmed.to_ascii_lowercase()
+    let stripped = trimmed.strip_prefix("Key").unwrap_or(trimmed);
+    let lower = stripped.to_ascii_lowercase();
+    // fcitx5 的 Key::parse 按 X11 keysym 名做**大小写敏感**查表：实测
+    // `SetCustomDictationTrigger("Menu")` → sym=0xff67 有效，`("menu")` →
+    // invalid key（2026-10-22）。这里只把查表中确实首字母大写的名字还原，
+    // 其余继续交给小写（space / f5 / 单字符都已验证可用）。
+    match lower.as_str() {
+        "menu" => "Menu".to_string(),
+        _ => lower,
     }
 }
 
@@ -603,6 +609,28 @@ mod tests {
     }
 
     #[test]
+    fn menu_primary_keeps_the_case_fcitx_expects() {
+        // fcitx5 的 Key::parse 用 X11 keysym 名做大小写敏感查表：'Menu' 有效、
+        // 'menu' 被拒（2026-10-22 实测 SetCustomDictationTrigger 返回
+        // "invalid key"）。主键名统一小写的旧逻辑会让 Menu 键永远注不上。
+        let binding = ShortcutBinding {
+            primary: "Menu".into(),
+            modifiers: Vec::new(),
+        };
+        assert_eq!(binding_to_fcitx_key(&binding), "Menu");
+        let key_cased = ShortcutBinding {
+            primary: "KeyMenu".into(),
+            modifiers: Vec::new(),
+        };
+        assert_eq!(binding_to_fcitx_key(&key_cased), "Menu");
+        let space = ShortcutBinding {
+            primary: "Space".into(),
+            modifiers: vec!["ctrl".into(), "alt".into()],
+        };
+        assert_eq!(binding_to_fcitx_key(&space), "Control+Alt+space");
+    }
+
+    #[test]
     fn mouse_shortcuts_are_rejected_by_the_linux_host() {
         for primary in ["Mouse4", "Mouse5"] {
             let binding = ShortcutBinding {
@@ -694,6 +722,7 @@ mod tests {
     #[test]
     fn registration_summary_shows_modifier_triggers() {
         let target = HotkeyRuntimeTarget {
+            qa_companion_key: "Space".into(),
             dictation: ShortcutBinding {
                 primary: "A".into(),
                 modifiers: vec!["alt".into()],

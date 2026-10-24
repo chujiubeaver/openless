@@ -1,29 +1,32 @@
 # 应用目录与工程结构
 
-状态：canonical；更新：2026-09-23。分层与调用链见 [架构](architecture.md)。
+状态：canonical；更新：2026-10-19。分层与调用链见 [架构](architecture.md)。
 
 ## 仓库与应用工作目录
 
 ```text
-1-app/                            Git 仓库、分支与发布边界
-├── AGENTS.md / docs/              规则、架构、合同说明和平台交接
+openless-src/                     Git 仓库、分支与发布边界
+├── docs/                         架构、合同说明、平台交接、已知缺口与参考样例
 ├── README.md / README.zh.md       面向使用者和贡献者的双语介绍
 ├── RELEASING.md / USAGE.md        发布规则与使用说明
-├── .github/workflows/            CI、Tauri、Android、Linux 发布
+├── .github/workflows/            CI、Tauri / Android / Linux / HarmonyOS 发布
 ├── Casks/                        Homebrew 分发定义
-├── Examples/                     示例数据
-├── assets/ / video-materials/     产品展示材料
-├── scripts/                      仓库级辅助脚本
+├── assets/                       产品展示材料
+├── scripts/                      仓库级辅助脚本（版本号同步等）
 └── openless-all/
-    ├── design_handoff_openless/   设计交接材料
-    └── app/                      npm 与 Core/Linux Cargo 工作目录
+    ├── README.md                全平台总览
+    ├── ios/                    原生 iPhone App、键盘扩展与录音组件
+    └── app/                     npm 与 Core/Linux Cargo 工作目录
         ├── src/                  React / TypeScript 界面
         ├── crates/openless-core/  共享业务 Rust crate
-        ├── src-tauri/            Tauri Host，独立 Cargo manifest
-        ├── linux-egui/           Linux Host 和 egui UI
+        ├── src-tauri/            Tauri Host（macOS / Windows / Android），独立 Cargo manifest
+        ├── linux-egui/           Linux Host 和 egui UI（不链接 Tauri / WebKitGTK）
+        ├── harmony/              HarmonyOS 宿主（ArkTS + ArkWeb + Rust napi）
+        ├── mobile-ime/           Android / 鸿蒙共用的输入法 native 后端
         ├── android/              Kotlin / AIDL / manifest / 前端片段
         ├── windows-ime/          原生 TSF/IME 工程
         ├── contract/             机器可读 backend-2.0 合同
+        ├── .cargo/config.toml    Windows GNU 目标的 linker flag（cdylib 符号导出）
         ├── scripts/              构建、平台检查与合同测试
         └── public/               Vite 静态资源
 ```
@@ -46,6 +49,7 @@
 | Tauri 组装与系统能力 | `src-tauri/src/coordinator.rs`、`core_adapters.rs`、`tauri_coordinator_host.rs` | 窗口、热键、权限、平台输入与生命周期 |
 | Linux 原生接入 | `linux-egui/src/main.rs`、`lib.rs`、`backend.rs` | `audio/credentials/fcitx5/hotkeys/settings` 等 Host 模块；见 [交接](linux-egui-handoff/README.md) |
 | Android 集成 | `android/`、`src-tauri/src/android/` | `@android` 别名与 `merge-android-*.mjs` 生成链 |
+| iOS 应用与输入法 | `../ios/App/`、`../ios/Keyboard/`、`../ios/RecordingWidget/` | SwiftUI/UIKit 界面、独立 Rust Host、共享版本配置；见 [iOS 工程](../openless-all/ios/README.md) |
 | Windows 输入法 | `windows-ime/`、`src-tauri/src/windows_ime_*.rs` | 原生工程、IPC 协议、目标应用和安装检查 |
 
 Core 其余模块按领域列于 [架构模块地图](architecture.md)。平台缺口、事件签名与验收项由专项文档维护，本文件只提供定位。
