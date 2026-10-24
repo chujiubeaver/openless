@@ -291,6 +291,7 @@ export const zhCN = {
     error: '出错了',
     inserted: '已插入 {{count}}',
     translating: '正在翻译',
+    liveTranslationTag: 'EN',
     selectionPolish: {
       polishing: '正在润色...',
       replaced: '已替换',
@@ -1421,6 +1422,11 @@ export const zhCN = {
       capsuleTranscriptDesc:
         '在胶囊中显示语音识别原文，替换音频条；关闭后恢复原有显示。非流式识别将在结果返回后显示。',
       capsuleTranscriptFontSize: '原文字号',
+      liveTranslationPreviewLabel: '实时英文翻译预览',
+      liveTranslationPreviewDesc:
+        '录音期间在胶囊中实时显示所说内容的英文翻译，仅供查看，不插入文档、不进历史，录音结束即清除。音频会额外实时发送到当前百炼渠道的翻译模型（qwen3.8-livetranslate-flash-realtime），使用同一 API Key，按音频时长计费。',
+      liveTranslationPreviewUnavailableOmni: '需要「多模态模式」且渠道为百炼（dashscope-omni）。',
+      liveTranslationPreviewUnavailableStreaming: '当前识别已提供实时原文，此功能不生效。',
       capsuleStyleLabel: '胶囊样式',
       capsuleStyleSiri: '流光 Siri 风格',
       capsuleStyleClassic: 'Openless 默认风格',

@@ -102,6 +102,57 @@ export function getCapsuleTranscriptRailHeight(style: CapsuleStyle): number {
   return CAPSULE_TRANSCRIPT_RAIL_HEIGHTS[style];
 }
 
+/** Live translation card: wrapped text keeps at most this many lines visible. */
+export const CAPSULE_TRANSLATION_MAX_LINES = 4;
+/** Card vertical padding + border, on top of the wrapped text block. */
+export const CAPSULE_TRANSLATION_CARD_CHROME = 18;
+/**
+ * Card max width in CSS px. Wider than the 460px capsule body so a wrapped
+ * English sentence needs fewer lines; the native window grows to match
+ * (see getCapsuleTranslationWindowWidth).
+ */
+export const CAPSULE_TRANSLATION_CARD_MAX_WIDTH = 640;
+
+/** Wrapped-text height budget at `fontSize` (the card's `maxHeight` prop). */
+export function getCapsuleTranslationTextHeight(fontSize: number): number {
+  return Math.ceil(CAPSULE_TRANSLATION_MAX_LINES * fontSize * 1.45);
+}
+
+/** Full card height in this tree's CSS px (text budget + padding/border). */
+export function getCapsuleTranslationCardHeight(fontSize: number): number {
+  return getCapsuleTranslationTextHeight(fontSize) + CAPSULE_TRANSLATION_CARD_CHROME;
+}
+
+/**
+ * Rail height to report to the native host when the translation card occupies
+ * the rail slot, in native logical px for `style`. Mirrors the override math in
+ * `capsule_window_bounds_for_style_with_transcript_and_translation`
+ * (src-tauri/src/lib.rs): Siri/Classic add their own 8px rail gap on top of
+ * this value; Typeless scales its whole tree by 0.447.
+ */
+export function getCapsuleTranslationRailHeight(style: CapsuleStyle, fontSize: number): number {
+  const card = getCapsuleTranslationCardHeight(fontSize);
+  if (style === 'typeless') {
+    return Math.ceil(card * 0.447) + 2;
+  }
+  return card;
+}
+
+/**
+ * Window width to report to the native host when the translation card is
+ * visible, in native logical px. The capsule window centers the wider card;
+ * Typeless scales its whole tree by 0.447.
+ */
+export function getCapsuleTranslationWindowWidth(
+  style: CapsuleStyle,
+  cardMaxWidth: number = CAPSULE_TRANSLATION_CARD_MAX_WIDTH,
+): number {
+  if (style === 'typeless') {
+    return Math.ceil(cardMaxWidth * 0.447) + 2;
+  }
+  return cardMaxWidth;
+}
+
 /** Classic's translating badge lives above the body and must also clear the
  * external 52px rail when the rail is hosted in a sibling HWND. */
 export function getClassicTranslationBadgeOffset(

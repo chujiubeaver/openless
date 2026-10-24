@@ -36,6 +36,22 @@ import { detectOS } from '../../components/WindowChrome';
 /** Selectable silence durations (seconds) for "auto-stop after silence"; see issue #860. */
 const silenceAutoStopOptions = [1, 1.5, 2, 3, 4, 5];
 
+/**
+ * Traditional-pipeline ASR providers that already display a live draft while
+ * recording (docs/live-translation-preview-design.md §7). Only used for the
+ * live-translation toggle's greyed-out reason text; the runtime gate lives in
+ * the core (`live_translation_plan`).
+ */
+const LIVE_DRAFT_ASR_PROVIDER_IDS = new Set([
+  'volcengine',
+  'iflytek',
+  'tencent-cloud',
+  'bailian',
+  'bailian-qwen3-realtime',
+  'stepfun-realtime',
+  'experimental-textstream',
+]);
+
 async function autostartIsEnabled(): Promise<boolean> {
   const { invoke } = await import('@tauri-apps/api/core');
   return invoke<boolean>('plugin:autostart|is_enabled');
@@ -181,6 +197,24 @@ export function RecordingInputSection() {
   const showDesktopStartup = showDesktopHotkey;
   const effectivePasteShortcut =
     os === 'win' && prefs.pasteShortcut === 'shiftInsert' ? 'ctrlV' : prefs.pasteShortcut;
+
+  // Live translation preview (design §7): v1 supports only the multimodal
+  // pipeline on a Bailian omni channel. Unsupported combinations grey the
+  // toggle out and show why; the stored value survives so switching back
+  // re-enables the preview automatically.
+  const multimodalActive =
+    prefs.multimodalPipelineEnabled === true && prefs.pipelineMode === 'multimodal';
+  const liveTranslationSupported =
+    multimodalActive && prefs.activeOmniProvider === 'dashscope-omni';
+  const liveDraftAlreadyActive =
+    !multimodalActive &&
+    !prefs.stableTranscriptionEnabled &&
+    LIVE_DRAFT_ASR_PROVIDER_IDS.has(prefs.activeAsrProvider);
+  const liveTranslationUnavailableReason = liveTranslationSupported
+    ? null
+    : liveDraftAlreadyActive
+      ? t('settings.recording.liveTranslationPreviewUnavailableStreaming')
+      : t('settings.recording.liveTranslationPreviewUnavailableOmni');
 
   const onModeChange = (mode: HotkeyMode) =>
     savePrefs({ ...prefs, hotkey: { ...prefs.hotkey, mode } });
@@ -502,6 +536,30 @@ export function RecordingInputSection() {
                 />
               </SettingRow>
             )}
+            <SettingRow
+              label={t('settings.recording.liveTranslationPreviewLabel')}
+              desc={t('settings.recording.liveTranslationPreviewDesc')}
+            >
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6, minWidth: 0 }}>
+                <Toggle
+                  on={prefs.liveTranslationPreviewEnabled ?? false}
+                  onToggle={(next) => savePrefs({ ...prefs, liveTranslationPreviewEnabled: next })}
+                  disabled={!liveTranslationSupported}
+                />
+                {!liveTranslationSupported && (
+                  <div
+                    style={{
+                      fontSize: 12,
+                      lineHeight: 1.5,
+                      color: 'var(--ol-ink-3)',
+                      maxWidth: 360,
+                    }}
+                  >
+                    {liveTranslationUnavailableReason}
+                  </div>
+                )}
+              </div>
+            </SettingRow>
           </>
         )}
         <SettingRow

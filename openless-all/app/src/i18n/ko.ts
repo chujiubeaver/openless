@@ -303,6 +303,7 @@ export const ko: typeof zhCN = {
     error: '오류 발생',
     inserted: '{{count}}자 입력됨',
     translating: '번역 중',
+    liveTranslationTag: 'EN',
     selectionPolish: {
       polishing: '다듬는 중...',
       replaced: '교체됨',
@@ -1468,6 +1469,13 @@ export const ko: typeof zhCN = {
       capsuleTranscriptDesc:
         '오디오 막대 대신 인식된 원문을 표시합니다. 끄면 기존 표시로 돌아갑니다. 비스트리밍 인식은 결과 수신 후 표시됩니다.',
       capsuleTranscriptFontSize: '원문 글자 크기',
+      liveTranslationPreviewLabel: '실시간 영어 번역 미리보기',
+      liveTranslationPreviewDesc:
+        '녹음 중 캡슐에 말한 내용의 영어 번역을 실시간으로 표시합니다. 보기 전용이며 문서에 삽입되거나 기록에 저장되지 않고 녹음이 끝나면 사라집니다. 오디오는 현재 Bailian 채널의 번역 모델(qwen3.8-livetranslate-flash-realtime)로 추가로 실시간 전송되며 동일한 API 키를 사용하고 오디오 길이로 과금됩니다.',
+      liveTranslationPreviewUnavailableOmni:
+        '멀티모달 모드이면서 채널이 Bailian(dashscope-omni)이어야 합니다.',
+      liveTranslationPreviewUnavailableStreaming:
+        '현재 인식 기능이 이미 실시간 원문을 제공하므로 이 미리보기는 활성화되지 않습니다.',
       capsuleStyleLabel: '캡슐 스타일',
       capsuleStyleSiri: '시리 광선 스타일',
       capsuleStyleClassic: 'Openless 기본 스타일',

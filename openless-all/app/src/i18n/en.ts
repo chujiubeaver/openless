@@ -318,6 +318,7 @@ export const en: typeof zhCN = {
     error: 'Something went wrong',
     inserted: 'Inserted {{count}}',
     translating: 'Translating',
+    liveTranslationTag: 'EN',
     selectionPolish: {
       polishing: 'Polishing…',
       replaced: 'Replaced',
@@ -1492,6 +1493,13 @@ export const en: typeof zhCN = {
       capsuleTranscriptDesc:
         'Show recognized speech in the capsule instead of audio bars. Turn off to restore the original display. Non-streaming recognition appears when results arrive.',
       capsuleTranscriptFontSize: 'Transcript font size',
+      liveTranslationPreviewLabel: 'Live English translation preview',
+      liveTranslationPreviewDesc:
+        'Show a live English translation of what you say in the capsule while recording. Display only: never inserted, never saved to history, cleared when recording ends. Audio is additionally streamed to the translation model (qwen3.8-livetranslate-flash-realtime) on your current Bailian channel using the same API key; billed by audio duration.',
+      liveTranslationPreviewUnavailableOmni:
+        'Requires Multimodal mode with a Bailian (dashscope-omni) channel.',
+      liveTranslationPreviewUnavailableStreaming:
+        'Your current recognizer already shows live text; this preview is inactive.',
       capsuleStyleLabel: 'Capsule style',
       capsuleStyleSiri: 'Shimmer Siri style',
       capsuleStyleClassic: 'OpenLess default style',

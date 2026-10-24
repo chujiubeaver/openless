@@ -61,13 +61,18 @@ pub async fn cancel_dictation(
 pub async fn set_capsule_transcript_visible(
     coord: CoordinatorState<'_>,
     visible: bool,
+    // Optional rail-size overrides in logical px; the multi-line live
+    // translation card reports its own budget instead of the per-style
+    // single-line rail constants (it is also wider than the capsule body).
+    rail_height: Option<f64>,
+    rail_width: Option<f64>,
 ) -> Result<(), String> {
     let host = coord.tauri_host();
     let Some(capsule) = host.capsule_window() else {
         return Ok(());
     };
     host.run_on_main_thread(move || {
-        if let Err(error) = capsule.set_transcript_visible(visible) {
+        if let Err(error) = capsule.set_transcript_visible(visible, rail_height, rail_width) {
             log::warn!("[capsule] transcript visibility layout failed: {error}");
         }
     })

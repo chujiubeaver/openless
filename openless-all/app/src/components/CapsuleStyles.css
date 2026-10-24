@@ -408,6 +408,115 @@
     inset 0 1px 0 rgb(255 255 255 / 5%);
 }
 
+/* Display-only live translation preview: same frost pill with a cool-blue edge
+   so the row reads as "translation", never as insertable transcript. */
+.ol-live-transcript-pill[data-tone='translate'] {
+  background: var(--ol-capsule-pill-bg);
+  border: 1px solid var(--ol-live-translate-pill-border, rgb(37 99 235 / 38%));
+  box-shadow: var(--ol-capsule-pill-shadow), var(--ol-capsule-pill-inset);
+}
+
+.ol-live-transcript-stage[data-tone='translate'] .ol-live-transcript-track {
+  color: var(--ol-live-translate-ink, var(--ol-capsule-center-ink));
+}
+
+/* The translation card may be wider than the 460px capsule stacks: size the
+   rail to its content (never shrink) so the centered card can overflow the
+   stack symmetrically while the native window provides the extra width. */
+.ol-capsule-transcript-rail--translation {
+  width: auto;
+  flex: 0 0 auto;
+}
+
+/* Multi-line live translation preview card. Wraps top-to-bottom; when the
+   text outgrows the frame the newest lines stay visible (flex-end packing
+   clips the top, which the mask fades out). */
+.ol-live-translation-card {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: flex-start;
+  gap: 8px;
+  box-sizing: border-box;
+  padding: 8px 14px;
+  border-radius: 14px;
+  background: var(--ol-capsule-pill-bg);
+  border: 1px solid var(--ol-live-translate-pill-border, rgb(37 99 235 / 38%));
+  box-shadow: var(--ol-capsule-pill-shadow), var(--ol-capsule-pill-inset);
+  pointer-events: none;
+  text-align: left;
+}
+
+.ol-live-translation-card[data-tone='dark'] {
+  background: var(--ol-typeless-bg, #18181b);
+  border-color: var(--ol-typeless-border, #52525b);
+  box-shadow:
+    0 5px 14px rgb(0 0 0 / 16%),
+    inset 0 1px 0 rgb(255 255 255 / 5%);
+}
+
+.ol-live-translation-card .ol-live-transcript-tag {
+  margin-right: 0;
+  margin-top: 1px;
+}
+
+.ol-live-translation-frame {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  overflow: hidden;
+  min-width: 0;
+}
+
+/* The fade exists only to hint at hidden lines above; applying it unconditionally
+   clipped the first visible line (user report 2026-10). */
+.ol-live-translation-frame[data-overflowed='true'] {
+  -webkit-mask-image: linear-gradient(to bottom, transparent, #000 26px);
+  mask-image: linear-gradient(to bottom, transparent, #000 26px);
+}
+
+.ol-live-translation-text {
+  font-family: var(--ol-font-sans);
+  font-weight: var(--ol-font-weight-medium);
+  line-height: 1.45;
+  letter-spacing: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  color: var(--ol-live-translate-ink, var(--ol-capsule-center-ink));
+  user-select: none;
+}
+
+/* Word-level birth animation: inline-block so the rise/blur transform applies,
+   with each word carrying its own trailing whitespace so wrapping stays natural. */
+.ol-live-translation-word {
+  display: inline-block;
+  white-space: pre-wrap;
+  word-break: break-word;
+  will-change: opacity, transform, filter;
+}
+
+.ol-live-translation-card[data-tone='dark'] .ol-live-translation-text {
+  color: var(--ol-typeless-ink, #fafafa);
+}
+
+.ol-live-transcript-tag {
+  flex: 0 0 auto;
+  align-self: center;
+  margin-right: 6px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-family: var(--ol-font-sans);
+  font-size: 10px;
+  font-weight: var(--ol-font-weight-semibold);
+  letter-spacing: 0.06em;
+  line-height: 1.4;
+  color: var(--ol-live-translate-tag-ink, #2563eb);
+  background: var(--ol-live-translate-tag-bg, rgb(37 99 235 / 12%));
+  border: 0.5px solid var(--ol-live-translate-tag-border, rgb(37 99 235 / 30%));
+  pointer-events: none;
+  user-select: none;
+}
+
 .ol-live-transcript-track {
   position: absolute;
   top: 0;

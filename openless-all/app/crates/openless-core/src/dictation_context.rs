@@ -207,6 +207,10 @@ pub struct DictationContext {
     /// retargeted to a destination that still requires polish before stopping.
     pub(crate) unconfigured_llm_raw: Option<(PolishMode, String)>,
     pub omni: ProviderInvocation,
+    /// Frozen display-only live translation preview plan. `None` keeps the
+    /// recorder decorator completely inert; see the `live_translation` module
+    /// and docs/live-translation-preview-design.md §3.2 for the gate.
+    pub live_translation: Option<crate::live_translation::LiveTranslationPlan>,
     pub polish: DictationPolishContext,
     pub insertion: DictationInsertionContext,
 }
@@ -335,6 +339,9 @@ impl DictationContext {
             deferred_llm_error: None,
             unconfigured_llm_raw: None,
             omni,
+            // Resolved by the backend after capture; see api.rs
+            // capture_dictation_context and live_translation::live_translation_plan.
+            live_translation: None,
             polish: DictationPolishContext {
                 mode: style_pack.base_mode,
                 style_pack_id: style_pack.id.clone(),

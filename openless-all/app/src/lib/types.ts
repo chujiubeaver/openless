@@ -354,6 +354,10 @@ export interface UserPreferences {
   capsuleStyle: CapsuleStyle;
   capsuleTranscriptEnabled: boolean;
   capsuleTranscriptFontSize: number;
+  /** Show a display-only live English translation in the capsule while recording (Bailian omni
+   *  channel only). Never inserted, never saved to history, cleared when recording ends. Off by
+   *  default; the audio is additionally streamed to the translation model and billed by duration. */
+  liveTranslationPreviewEnabled: boolean;
   /** Temporarily mutes system output during recording; restores the original mute state on stop/cancel/error. */
   muteDuringRecording: boolean;
   /** Record fully first, then connect to the current ASR and submit the whole audio on stop. Off by default. */

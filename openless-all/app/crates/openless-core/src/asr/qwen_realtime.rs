@@ -639,7 +639,10 @@ impl AudioConsumer for Qwen3RealtimeASR {
     }
 }
 
-fn drain_audio_chunks(buffer: &mut Vec<u8>) -> Vec<Vec<u8>> {
+/// Shared 100 ms chunking of the canonical PCM buffer. `qwen_livetranslate`
+/// reuses this so both realtime clients frame audio identically, hence
+/// `pub(crate)`.
+pub(crate) fn drain_audio_chunks(buffer: &mut Vec<u8>) -> Vec<Vec<u8>> {
     let mut chunks = Vec::new();
     while buffer.len() >= TARGET_AUDIO_CHUNK_BYTES {
         chunks.push(buffer.drain(..TARGET_AUDIO_CHUNK_BYTES).collect());

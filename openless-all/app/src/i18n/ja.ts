@@ -309,6 +309,7 @@ export const ja: typeof zhCN = {
     error: 'エラーが発生しました',
     inserted: '{{count}} 文字を入力しました',
     translating: '翻訳中',
+    liveTranslationTag: 'EN',
     selectionPolish: {
       polishing: '推敲中...',
       replaced: '置き換えました',
@@ -1480,6 +1481,13 @@ export const ja: typeof zhCN = {
       capsuleTranscriptDesc:
         '音声バーの代わりに認識した原文を表示します。オフにすると元の表示に戻ります。非ストリーミング認識は結果の受信後に表示します。',
       capsuleTranscriptFontSize: '文字起こしの文字サイズ',
+      liveTranslationPreviewLabel: 'リアルタイム英語翻訳プレビュー',
+      liveTranslationPreviewDesc:
+        '録音中に、話した内容の英語翻訳をカプセルにリアルタイム表示します。表示専用で、文書への挿入や履歴への保存は行わず、録音終了時に消去されます。音声は現在の Bailian チャネルの翻訳モデル（qwen3.8-livetranslate-flash-realtime）にもリアルタイム送信され、同じ API キーを使い、音声の長さで課金されます。',
+      liveTranslationPreviewUnavailableOmni:
+        '「マルチモーダルモード」で、チャネルが Bailian（dashscope-omni）の場合に利用できます。',
+      liveTranslationPreviewUnavailableStreaming:
+        '現在の認識機能がすでにリアルタイム原文を表示しているため、このプレビューは有効になりません。',
       capsuleStyleLabel: 'カプセルスタイル',
       capsuleStyleSiri: '光条 Siri スタイル',
       capsuleStyleClassic: 'Openless デフォルトスタイル',

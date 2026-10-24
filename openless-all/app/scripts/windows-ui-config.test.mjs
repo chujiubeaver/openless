@@ -337,7 +337,7 @@ assertMatch(
 
 const conditionalReturn = capsuleTsx.indexOf('if (insertFallback)');
 const transcriptVisibilityHook = capsuleTsx.indexOf(
-  'setCapsuleTranscriptVisible(transcriptVisible)',
+  'setCapsuleTranscriptVisible(capsuleRailVisible, capsuleRailHeight, capsuleRailWidth)',
 );
 if (
   conditionalReturn < 0 ||
@@ -368,8 +368,8 @@ assertMatch(
 );
 assertMatch(
   capsuleTsx,
-  /setCapsuleTranscriptVisible\(transcriptVisible\)/,
-  'frontend should sync transcript visibility to the native hit area',
+  /setCapsuleTranscriptVisible\(capsuleRailVisible, capsuleRailHeight, capsuleRailWidth\)/,
+  'frontend should sync rail visibility and the wrapped-card height to the native hit area',
 );
 
 assertMatch(

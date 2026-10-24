@@ -743,6 +743,17 @@ pub fn default_omni_model(provider_type: &str) -> Option<&'static str> {
     }
 }
 
+/// Default model for the display-only live translation preview
+/// (docs/live-translation-preview-design.md §1).
+pub const QWEN_LIVETRANSLATE_DEFAULT_MODEL: &str = "qwen3.8-livetranslate-flash-realtime";
+
+/// v1: only the Bailian omni channel speaks the realtime translation protocol
+/// with the same channel credentials. Other omni channels (openai/gemini/
+/// custom) keep the preview disabled.
+pub fn channel_supports_live_translation(provider_type: &str) -> bool {
+    provider_type == "dashscope-omni"
+}
+
 pub fn parse_extra_headers(value: &str) -> Result<HashMap<String, String>, BackendError> {
     if value.trim().is_empty() {
         return Ok(HashMap::new());

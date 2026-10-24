@@ -3452,6 +3452,8 @@ pub(crate) fn position_capsule_bottom_center_with_style<R: tauri::Runtime>(
         translation_active,
         style,
         true,
+        None,
+        None,
     )
 }
 
@@ -3460,6 +3462,8 @@ pub(crate) fn position_capsule_bottom_center_with_style_and_transcript<R: tauri:
     translation_active: bool,
     style: types::CapsuleStyle,
     transcript_visible: bool,
+    rail_height_override: Option<f64>,
+    rail_width_override: Option<f64>,
 ) -> tauri::Result<()> {
     // Windows renders the transcript in a separate click-through overlay HWND. The capsule
     // window itself therefore reserves only the body height; keeping the rail in this window
@@ -3473,6 +3477,8 @@ pub(crate) fn position_capsule_bottom_center_with_style_and_transcript<R: tauri:
         style,
         native_transcript_visible,
         translation_active,
+        rail_height_override,
+        rail_width_override,
     );
     let bottom_gap = capsule_bottom_gap(style);
 
@@ -3574,6 +3580,8 @@ fn capsule_window_bounds_for_style_with_transcript(
         style,
         transcript_visible,
         false,
+        None,
+        None,
     )
 }
 
@@ -3581,8 +3589,10 @@ fn capsule_window_bounds_for_style_with_transcript_and_translation(
     style: types::CapsuleStyle,
     transcript_visible: bool,
     translation_active: bool,
+    rail_height_override: Option<f64>,
+    rail_width_override: Option<f64>,
 ) -> CapsuleWindowBounds {
-    CapsuleWindowBounds {
+    let mut bounds = CapsuleWindowBounds {
         // The typeless window area is 1/5 of the original size (460×128); the frontend
         // scales content in sync with CSS zoom — see CapsuleStyles.css and
         // src/lib/capsuleLayout.ts.
@@ -3617,7 +3627,29 @@ fn capsule_window_bounds_for_style_with_transcript_and_translation(
             }
         },
         bottom_inset: 0.0,
+    };
+    // The wrapped live-translation card reports its own rail budget instead of
+    // the per-style single-line constants: rebuild the height from the base
+    // plus the override (mirrors getCapsuleTranslationRailHeight in
+    // src/lib/capsuleLayout.ts).
+    if let Some(width) = rail_width_override.filter(|w| *w > bounds.width && w.is_finite()) {
+        bounds.width = width;
     }
+    if transcript_visible {
+        if let Some(rail) = rail_height_override.filter(|rail| *rail > 0.0 && rail.is_finite()) {
+            bounds.height = match style {
+                // 180px stage + 8px gap + rail (rail=40 reproduces 228).
+                types::CapsuleStyle::Siri => 188.0 + rail,
+                // 172px host already contains the 52px rail slot; swap it (rail=52
+                // reproduces 172).
+                types::CapsuleStyle::Classic => 120.0 + rail,
+                // Typeless scales its whole tree by 0.447; the base already fits
+                // the capsule body, so the rail stacks on top.
+                types::CapsuleStyle::Typeless => bounds.height + rail,
+            };
+        }
+    }
+    bounds
 }
 
 fn capsule_visual_height(_translation_active: bool) -> f64 {
@@ -3886,8 +3918,70 @@ mod tests {
             CapsuleStyle::Typeless,
             true,
             true,
+            None,
+            None,
         );
         assert_eq!((bounds.width, bounds.height), (206.0, 65.0));
+    }
+
+    #[test]
+    fn live_translation_card_grows_the_window_without_disturbing_defaults() {
+        // Omitted override reproduces the single-line rail budgets exactly.
+        for (style, visible, expected) in [
+            (CapsuleStyle::Siri, true, 228.0),
+            (CapsuleStyle::Siri, false, 180.0),
+            (CapsuleStyle::Classic, true, 172.0),
+            (CapsuleStyle::Classic, false, 100.0),
+            (CapsuleStyle::Typeless, false, 57.0),
+        ] {
+            let bounds = capsule_window_bounds_for_style_with_transcript_and_translation(
+                style,
+                visible,
+                false,
+                None,
+                None,
+            );
+            assert_eq!(bounds.height, expected, "{style:?} visible={visible}");
+        }
+        // A 101px rail override (a 4-line card at 14px font) replaces the rail:
+        // Siri 180+8+101, Classic 120+101, Typeless 57+101.
+        for (style, expected) in [
+            (CapsuleStyle::Siri, 289.0),
+            (CapsuleStyle::Classic, 221.0),
+            (CapsuleStyle::Typeless, 158.0),
+        ] {
+            let bounds = capsule_window_bounds_for_style_with_transcript_and_translation(
+                style,
+                true,
+                false,
+                Some(101.0),
+                Some(640.0),
+            );
+            assert_eq!(bounds.height, expected, "{style:?} card rail");
+            assert_eq!(bounds.width, 640.0, "{style:?} card width");
+        }
+        // Garbage overrides are ignored, and hidden rails never apply one.
+        let bounds = capsule_window_bounds_for_style_with_transcript_and_translation(
+            CapsuleStyle::Siri,
+            true,
+            false,
+            Some(f64::NAN),
+            Some(200.0),
+        );
+        assert_eq!(bounds.height, 228.0);
+        // A width below the per-style base is ignored (the capsule body never shrinks).
+        assert_eq!(bounds.width, 460.0);
+        let bounds = capsule_window_bounds_for_style_with_transcript_and_translation(
+            CapsuleStyle::Siri,
+            false,
+            false,
+            Some(400.0),
+            Some(700.0),
+        );
+        assert_eq!(bounds.height, 180.0);
+        // Width follows the wider card even while the rail height override is
+        // gated on transcript visibility.
+        assert_eq!(bounds.width, 700.0);
     }
 
     #[test]

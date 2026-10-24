@@ -291,6 +291,7 @@ export const zhTW: typeof zhCN = {
     error: '出錯了',
     inserted: '已插入 {{count}}',
     translating: '正在翻譯',
+    liveTranslationTag: 'EN',
     selectionPolish: {
       polishing: '正在潤色...',
       replaced: '已替換',
@@ -1422,6 +1423,11 @@ export const zhTW: typeof zhCN = {
       capsuleTranscriptDesc:
         '在膠囊中顯示語音辨識原文，取代音訊條；關閉後恢復原有顯示。非串流辨識將於結果傳回後顯示。',
       capsuleTranscriptFontSize: '原文字級',
+      liveTranslationPreviewLabel: '即時英文翻譯預覽',
+      liveTranslationPreviewDesc:
+        '錄音期間在膠囊中即時顯示所說內容的英文翻譯，僅供查看，不插入文件、不進歷史，錄音結束即清除。音訊會額外即時傳送到目前百煉渠道的翻譯模型（qwen3.8-livetranslate-flash-realtime），使用同一 API Key，依音訊時長計費。',
+      liveTranslationPreviewUnavailableOmni: '需要「多模態模式」且渠道為百煉（dashscope-omni）。',
+      liveTranslationPreviewUnavailableStreaming: '目前辨識已提供即時原文，此功能不生效。',
       capsuleStyleLabel: '膠囊樣式',
       capsuleStyleSiri: '流光 Siri 風格',
       capsuleStyleClassic: 'Openless 預設風格',

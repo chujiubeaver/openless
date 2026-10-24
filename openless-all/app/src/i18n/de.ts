@@ -320,6 +320,7 @@ export const de: typeof zhCN = {
     error: 'Ein Fehler ist aufgetreten',
     inserted: '{{count}} eingefügt',
     translating: 'Wird übersetzt',
+    liveTranslationTag: 'EN',
     selectionPolish: {
       polishing: 'Wird überarbeitet…',
       replaced: 'Ersetzt',
@@ -1521,6 +1522,13 @@ export const de: typeof zhCN = {
       capsuleTranscriptDesc:
         'Erkannten Originaltext statt Audiobalken anzeigen. Ohne Streaming erscheint der Text nach der Erkennung. Deaktivieren stellt die bisherige Anzeige wieder her.',
       capsuleTranscriptFontSize: 'Transkript-Schriftgröße',
+      liveTranslationPreviewLabel: 'Live-Übersetzungsvorschau (Englisch)',
+      liveTranslationPreviewDesc:
+        'Zeigt während der Aufnahme eine Live-Übersetzung des Gesprochenen auf Englisch in der Kapsel. Nur zur Anzeige: wird nie eingefügt, nie im Verlauf gespeichert und beim Aufnahmeende gelöscht. Das Audio wird zusätzlich zum Übersetzungsmodell (qwen3.8-livetranslate-flash-realtime) Ihres aktuellen Bailian-Kanals gestreamt, mit demselben API-Schlüssel; Abrechnung nach Audiodauer.',
+      liveTranslationPreviewUnavailableOmni:
+        'Erfordert den Multimodal-Modus mit einem Bailian-Kanal (dashscope-omni).',
+      liveTranslationPreviewUnavailableStreaming:
+        'Ihre aktuelle Erkennung zeigt bereits Live-Text; diese Vorschau ist inaktiv.',
       capsuleStyleLabel: 'Kapselstil',
       capsuleStyleSiri: 'Schimmernder Siri-Stil',
       capsuleStyleClassic: 'OpenLess-Standardstil',

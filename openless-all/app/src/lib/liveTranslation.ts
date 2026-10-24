@@ -1,0 +1,153 @@
+import type { BackendEvent } from './backendEvent';
+import type { CapsuleState } from './types';
+
+/**
+ * Display-only live translation preview (docs/live-translation-preview-design.md §5).
+ *
+ * Updates are full-text snapshots published as `live_translation_update`
+ * backend events. This reducer deliberately shares NO state with
+ * `TranscriptViewState`: the preview must never leak into the transcript rail,
+ * insertion, or history. Session gating mirrors the transcript reducer so a
+ * late event from a previous session cannot repaint a new one.
+ */
+
+export type LiveTranslationStatus = 'streaming' | 'unavailable';
+
+export interface LiveTranslationUpdate {
+  text: string;
+  status: LiveTranslationStatus;
+}
+
+export interface LiveTranslationViewState {
+  sessionId: string | null;
+  /** Global backend event watermark; shared cadence with the transcript state. */
+  sequence: number;
+  text: string;
+  /** Reject updates until the backend announces the owning session. */
+  awaitingSessionStart: boolean;
+  sessionStartObserved: boolean;
+  /** Sticky per generation: once unavailable the row stays hidden. */
+  unavailable: boolean;
+}
+
+export function createLiveTranslationState(): LiveTranslationViewState {
+  return {
+    sessionId: null,
+    sequence: 0,
+    text: '',
+    awaitingSessionStart: false,
+    sessionStartObserved: false,
+    unavailable: false,
+  };
+}
+
+/**
+ * Start a new UI generation at the recording edge. Like the transcript rail, a
+ * session already announced by `dictation_state_changed(starting)` is reused so
+ * events that arrive before the capsule:state edge are not erased.
+ */
+export function beginLiveTranslationGeneration(
+  state: LiveTranslationViewState,
+): LiveTranslationViewState {
+  const reuseStartedSession =
+    state.sessionStartObserved && state.sessionId !== null && !state.awaitingSessionStart;
+  return {
+    ...state,
+    sessionId: reuseStartedSession ? state.sessionId : null,
+    text: reuseStartedSession ? state.text : '',
+    unavailable: reuseStartedSession ? state.unavailable : false,
+    awaitingSessionStart: !reuseStartedSession,
+    sessionStartObserved: false,
+  };
+}
+
+/** Terminal capsule states clear the row; the next generation re-arms it. */
+export function clearLiveTranslation(state: LiveTranslationViewState): LiveTranslationViewState {
+  return { ...state, text: '', unavailable: false, sessionStartObserved: false };
+}
+
+/** Apply the session id carried by capsule:state before backend:event. */
+export function applyLiveTranslationSessionId(
+  state: LiveTranslationViewState,
+  sessionId: string | null | undefined,
+): LiveTranslationViewState {
+  if (!sessionId || sessionId === state.sessionId) return state;
+  return {
+    ...state,
+    sessionId,
+    text: '',
+    unavailable: false,
+    awaitingSessionStart: false,
+    sessionStartObserved: true,
+  };
+}
+
+export function applyLiveTranslationEvent(
+  state: LiveTranslationViewState,
+  event: BackendEvent,
+): LiveTranslationViewState {
+  if (event.sequence <= state.sequence) return state;
+  const sequence = event.sequence;
+  if (event.kind.type === 'dictation_state_changed') {
+    const payload = event.kind.payload as { phase?: string; sessionId?: string | null } | undefined;
+    const sessionId = payload?.sessionId ?? event.sessionId;
+    if (sessionId && sessionId !== state.sessionId) {
+      return {
+        ...state,
+        sessionId,
+        sequence,
+        text: '',
+        unavailable: false,
+        awaitingSessionStart: false,
+        sessionStartObserved: true,
+      };
+    }
+    return {
+      ...state,
+      sessionId: sessionId ?? state.sessionId,
+      sequence,
+      awaitingSessionStart: payload?.phase === 'starting' ? false : state.awaitingSessionStart,
+      sessionStartObserved: payload?.phase === 'starting' ? true : state.sessionStartObserved,
+    };
+  }
+  if (event.kind.type !== 'live_translation_update') {
+    return { ...state, sequence };
+  }
+  // Gate exactly like the transcript rail: drop late events from a session
+  // that is not the observed one, and hold updates until the session starts.
+  if (state.awaitingSessionStart) return { ...state, sequence };
+  if (state.sessionId !== null && event.sessionId !== state.sessionId) {
+    return { ...state, sequence };
+  }
+  const payload = event.kind.payload as LiveTranslationUpdate | undefined;
+  if (!payload || typeof payload.text !== 'string') return { ...state, sequence };
+  if (payload.status === 'unavailable') {
+    return {
+      ...state,
+      sessionId: event.sessionId ?? state.sessionId,
+      sequence,
+      text: '',
+      unavailable: true,
+    };
+  }
+  // Sticky hidden: a session that reported Unavailable never repaints.
+  if (state.unavailable) return { ...state, sequence };
+  return {
+    ...state,
+    sessionId: event.sessionId ?? state.sessionId,
+    sequence,
+    text: payload.text,
+  };
+}
+
+/** Same visibility contract as the transcript rail (capsuleTranscript.ts). */
+export function visibleLiveTranslation(
+  text: string,
+  enabled: boolean,
+  state: CapsuleState,
+  selectionPolish: boolean,
+): string {
+  return enabled && !selectionPolish && ['recording', 'transcribing', 'polishing'].includes(state)
+    ? text.trim()
+    : '';
+}

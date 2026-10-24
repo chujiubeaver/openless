@@ -4,6 +4,9 @@ import {
   getCapsulePillMetrics,
   getCapsuleTranscriptRailHeight,
   getCapsuleTranscriptRailPosition,
+  getCapsuleTranslationCardHeight,
+  getCapsuleTranslationRailHeight,
+  getCapsuleTranslationTextHeight,
   getClassicCapsuleGeometry,
   getClassicProcessingLabel,
   getClassicTranslationBadgeOffset,
@@ -261,3 +264,31 @@ assertEqual(
   undefined,
   'unknown styles do not replace the active choice',
 );
+
+// Live translation card budget: 4 wrapped lines at the effective font size
+// plus the card chrome, and the native rail override that mirrors the Rust
+// window-bounds math (Siri/Classic add their own 8px gap; Typeless zooms).
+assertEqual(
+  getCapsuleTranslationTextHeight(14),
+  Math.ceil(4 * 14 * 1.45),
+  'text height is 4 wrapped lines at the font size',
+);
+assertEqual(
+  getCapsuleTranslationCardHeight(14),
+  Math.ceil(4 * 14 * 1.45) + 18,
+  'card height adds padding and border chrome',
+);
+if (getCapsuleTranslationCardHeight(20) <= getCapsuleTranslationCardHeight(12))
+  throw new Error('card height must scale with the font size');
+for (const style of ['siri', 'classic'] as const) {
+  assertEqual(
+    getCapsuleTranslationRailHeight(style, 14),
+    getCapsuleTranslationCardHeight(14),
+    `${style} rail override is the card height without an extra gap`,
+  );
+}
+const typelessRail = getCapsuleTranslationRailHeight('typeless', 14);
+if (typelessRail < getCapsuleTranslationCardHeight(14) * 0.447)
+  throw new Error('typeless rail override must be at least the zoomed card');
+if (typelessRail > getCapsuleTranslationCardHeight(14) * 0.447 + 3)
+  throw new Error('typeless rail override adds only a small rounding margin');

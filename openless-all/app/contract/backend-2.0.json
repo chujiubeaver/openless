@@ -48,6 +48,7 @@
       "backend_stopping",
       "dictation_state_changed",
       "transcript_delta",
+      "live_translation_update",
       "polish_delta",
       "dictation_completed",
       "recording_control_requested",
@@ -112,6 +113,14 @@
         "kind": {
           "type": "transcript_delta",
           "payload": { "text": "delta", "offset": 0, "isFinal": false }
+        }
+      },
+      "live_translation_update": {
+        "sequence": 1,
+        "sessionId": null,
+        "kind": {
+          "type": "live_translation_update",
+          "payload": { "text": "Hello world", "status": "streaming" }
         }
       },
       "polish_delta": {

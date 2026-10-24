@@ -408,6 +408,10 @@ pub enum BackendEventKind {
     BackendStopping,
     DictationStateChanged(DictationStateSnapshot),
     TranscriptDelta(TranscriptDelta),
+    /// Display-only live translation preview snapshots. Deliberately separate
+    /// from `TranscriptDelta`: this text is never inserted, accumulated or
+    /// persisted (docs/live-translation-preview-design.md §4).
+    LiveTranslationUpdate(crate::live_translation::LiveTranslationUpdate),
     PolishDelta(PolishDelta),
     DictationCompleted(DictationResult),
     RecordingControlRequested(RecordingControlRequest),

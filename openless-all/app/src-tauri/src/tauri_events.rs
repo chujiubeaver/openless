@@ -187,6 +187,9 @@ async fn forward_legacy_event(
             emit_dictation_state(app, backend, snapshot)
         }
         BackendEventKind::TranscriptDelta(_) => {}
+        // The live translation preview reaches the capsule through the generic
+        // `backend:event` emit above; it has no legacy per-window payload.
+        BackendEventKind::LiveTranslationUpdate(_) => {}
         BackendEventKind::DictationCompleted(result) => {
             capsule_owners.transcription_notice = None;
             capsule_owners.qa_voice = None;

@@ -4,7 +4,8 @@ import { cancelDictation, stopDictation } from '../lib/ipc/dictation';
 import type { CapsuleState, CapsuleStyle } from '../lib/types';
 import { Icon } from './Icon';
 import { VoiceOrbStage } from './VoiceOrbStage';
-import { CapsuleTranscriptRail } from './LiveTranscriptPill';
+import { CapsuleTranscriptRail, LiveTranslationCard } from './LiveTranscriptPill';
+import { CAPSULE_TRANSLATION_CARD_MAX_WIDTH } from '../lib/capsuleLayout';
 import './CapsuleStyles.css';
 
 interface TypelessCapsuleProps {
@@ -12,6 +13,10 @@ interface TypelessCapsuleProps {
   level: number;
   message?: string;
   transcript?: string;
+  /** Display-only live translation preview; fills the draft slot when empty. */
+  translationPreview?: string;
+  /** Card layout budget (`maxHeight` at the effective font size, pre-zoom). */
+  translationCard?: { maxHeight: number };
   transcriptFontSize?: number;
   insertedChars?: number;
   operating?: boolean;
@@ -41,6 +46,8 @@ export function TypelessCapsule({
   level,
   message,
   transcript,
+  translationPreview,
+  translationCard,
   transcriptFontSize = 14,
   insertedChars = 0,
   operating = false,
@@ -53,6 +60,8 @@ export function TypelessCapsule({
   const recording = state === 'recording';
   const processing = state === 'transcribing' || state === 'polishing';
   const liveText = transcript?.trim() ?? '';
+  const previewText = liveText ? '' : (translationPreview?.trim() ?? '');
+  const railText = liveText || previewText;
   const label = processing
     ? t(operating ? 'capsule.using' : 'capsule.thinking')
     : state === 'done'
@@ -67,7 +76,7 @@ export function TypelessCapsule({
     <div
       className="ol-typeless-capsule-wrap"
       data-preview={preview}
-      style={liveText ? { width: 460 } : undefined}
+      style={railText ? { width: Math.max(460, CAPSULE_TRANSLATION_CARD_MAX_WIDTH) } : undefined}
     >
       <div className="ol-typeless-capsule-stack">
         {liveText && (
@@ -78,6 +87,16 @@ export function TypelessCapsule({
             stageWidth={460}
             maxWidth={440}
             height={52}
+          />
+        )}
+        {previewText && translationCard != null && (
+          <LiveTranslationCard
+            text={previewText}
+            fontSize={transcriptFontSize / 0.447}
+            maxWidth={CAPSULE_TRANSLATION_CARD_MAX_WIDTH}
+            maxHeight={translationCard.maxHeight / 0.447}
+            tone="dark"
+            tag={t('capsule.liveTranslationTag')}
           />
         )}
         {translation && translationInSameWindow && (

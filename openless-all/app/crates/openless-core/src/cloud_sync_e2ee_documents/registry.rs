@@ -117,6 +117,13 @@ pub const PREFERENCE_FIELDS: &[PreferenceField] = &[
         reason: "portable_setting",
     },
     PreferenceField {
+        rust_name: "live_translation_preview_enabled",
+        key: "liveTranslationPreviewEnabled",
+        class: PreferenceClass::Portable,
+        shape: PreferenceShape::Boolean,
+        reason: "portable_setting",
+    },
+    PreferenceField {
         rust_name: "mute_during_recording",
         key: "muteDuringRecording",
         class: PreferenceClass::Portable,

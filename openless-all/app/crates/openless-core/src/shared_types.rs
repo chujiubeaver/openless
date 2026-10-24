@@ -402,6 +402,12 @@ pub struct UserPreferences {
     pub capsule_transcript_enabled: bool,
     #[serde(default = "default_capsule_transcript_font_size")]
     pub capsule_transcript_font_size: u8,
+    /// Show a display-only live English translation in the capsule while
+    /// recording (Bailian omni channel only). Never inserted, never saved to
+    /// history, cleared when the recording ends. Default off; audio is billed
+    /// separately by the translation model.
+    #[serde(default)]
+    pub live_translation_preview_enabled: bool,
     /// Temporarily mute system output during recording; restore the original mute state on stop/cancel/error.
     #[serde(default)]
     pub mute_during_recording: bool,
@@ -970,6 +976,8 @@ struct UserPreferencesWire {
     #[serde(default = "default_capsule_transcript_font_size")]
     capsule_transcript_font_size: u8,
     #[serde(default)]
+    live_translation_preview_enabled: bool,
+    #[serde(default)]
     mute_during_recording: bool,
     #[serde(default)]
     audio_enhancement_enabled: bool,
@@ -1232,6 +1240,7 @@ impl Default for UserPreferencesWire {
             capsule_style: prefs.capsule_style,
             capsule_transcript_enabled: prefs.capsule_transcript_enabled,
             capsule_transcript_font_size: prefs.capsule_transcript_font_size,
+            live_translation_preview_enabled: prefs.live_translation_preview_enabled,
             mute_during_recording: prefs.mute_during_recording,
             audio_enhancement_enabled: prefs.audio_enhancement_enabled,
             stable_transcription_enabled: prefs.stable_transcription_enabled,
@@ -1435,6 +1444,7 @@ impl<'de> Deserialize<'de> for UserPreferences {
             capsule_style: wire.capsule_style,
             capsule_transcript_enabled: wire.capsule_transcript_enabled,
             capsule_transcript_font_size: wire.capsule_transcript_font_size.clamp(12, 20),
+            live_translation_preview_enabled: wire.live_translation_preview_enabled,
             mute_during_recording: wire.mute_during_recording,
             audio_enhancement_enabled: wire.audio_enhancement_enabled,
             stable_transcription_enabled: wire.stable_transcription_enabled,
@@ -1815,6 +1825,7 @@ impl Default for UserPreferences {
             capsule_style: CapsuleStyle::Siri,
             capsule_transcript_enabled: true,
             capsule_transcript_font_size: default_capsule_transcript_font_size(),
+            live_translation_preview_enabled: false,
             mute_during_recording: false,
             audio_enhancement_enabled: false,
             stable_transcription_enabled: false,
@@ -3831,5 +3842,28 @@ mod capsule_transcript_preferences_tests {
                 .capsule_transcript_font_size,
             12
         );
+    }
+}
+
+#[cfg(test)]
+mod live_translation_preview_preference_tests {
+    use super::*;
+
+    #[test]
+    fn live_translation_preview_defaults_off_and_roundtrips() {
+        // Old JSON without the field must deserialize to the safe default.
+        let mut value = serde_json::to_value(UserPreferences::default()).unwrap();
+        value
+            .as_object_mut()
+            .unwrap()
+            .remove("liveTranslationPreviewEnabled");
+        let old: UserPreferences = serde_json::from_value(value).unwrap();
+        assert!(!old.live_translation_preview_enabled);
+
+        let mut prefs = old;
+        prefs.live_translation_preview_enabled = true;
+        let restored: UserPreferences =
+            serde_json::from_slice(&serde_json::to_vec(&prefs).unwrap()).unwrap();
+        assert!(restored.live_translation_preview_enabled);
     }
 }

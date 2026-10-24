@@ -318,6 +318,7 @@ export const es: typeof zhCN = {
     error: 'Se ha producido un error',
     inserted: '{{count}} insertados',
     translating: 'Traduciendo',
+    liveTranslationTag: 'EN',
     selectionPolish: {
       polishing: 'Mejorando el texto…',
       replaced: 'Reemplazado',
@@ -1513,6 +1514,13 @@ export const es: typeof zhCN = {
       capsuleTranscriptDesc:
         'Muestra el texto reconocido en lugar de las barras de audio. Sin streaming, aparece al recibir el resultado. Desactiva para restaurar la vista original.',
       capsuleTranscriptFontSize: 'Tamaño de la transcripción',
+      liveTranslationPreviewLabel: 'Vista previa de traducción al inglés en directo',
+      liveTranslationPreviewDesc:
+        'Muestra en la cápsula una traducción al inglés en directo de lo que dices mientras grabas. Solo visualización: nunca se inserta, nunca se guarda en el historial y se borra al terminar la grabación. El audio se transmite además al modelo de traducción (qwen3.8-livetranslate-flash-realtime) de tu canal Bailian actual con la misma clave API; se factura por duración de audio.',
+      liveTranslationPreviewUnavailableOmni:
+        'Requiere el modo multimodal con un canal Bailian (dashscope-omni).',
+      liveTranslationPreviewUnavailableStreaming:
+        'Tu reconocedor actual ya muestra texto en directo; esta vista previa está inactiva.',
       capsuleStyleLabel: 'Estilo de cápsula',
       capsuleStyleSiri: 'Estilo luminoso Siri',
       capsuleStyleClassic: 'Estilo predeterminado de OpenLess',

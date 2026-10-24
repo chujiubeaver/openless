@@ -258,6 +258,27 @@ pub(crate) fn backend_dependencies(
         Arc::clone(&host_recorder),
         external,
     ));
+    // Display-only live translation preview
+    // (docs/live-translation-preview-design.md): wraps the router so both
+    // dictation engines tee PCM without modification. The decorator is an
+    // identity pass-through unless the frozen session context carries a plan.
+    let recorder: Arc<dyn AudioRecorder> = openless_core::LiveTranslationRecorder::wrap(
+        recorder,
+        Arc::new(openless_core::QwenLiveTranslatorFactory::new(
+            Arc::clone(&credential_store),
+            Arc::clone(&task_spawner),
+        )),
+        Arc::clone(&task_spawner),
+        {
+            let backend = Arc::clone(&backend);
+            Arc::new(move || {
+                let backend = backend.lock().as_ref()?.upgrade()?;
+                Some(openless_core::live_translation_sink(
+                    backend.event_publisher(),
+                ))
+            })
+        },
+    );
     let traditional = Arc::new(openless_core::PipelineDictationEngine::new(
         Arc::clone(&recorder),
         transcription,

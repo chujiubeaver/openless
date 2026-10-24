@@ -5,7 +5,11 @@ import { detectOS, type OS } from './WindowChrome';
 import { warmUpSiriShaders } from './SiriGL';
 import { VoiceOrbStage } from './VoiceOrbStage';
 import { TypelessCapsule } from './TypelessCapsule';
-import { CapsuleTranscriptRail, CapsuleTranslationBadge } from './LiveTranscriptPill';
+import {
+  CapsuleTranscriptRail,
+  CapsuleTranslationBadge,
+  LiveTranslationCard,
+} from './LiveTranscriptPill';
 import { capsuleTranscriptFontSize, visibleCapsuleTranscript } from '../lib/capsuleTranscript';
 import { getSettings } from '../lib/ipc/settings';
 import { cancelDictation, setCapsuleTranscriptVisible, stopDictation } from '../lib/ipc/dictation';
@@ -16,6 +20,10 @@ import {
   getClassicCapsuleGeometry,
   getClassicProcessingLabel,
   getCapsuleTranscriptRailHeight,
+  getCapsuleTranslationRailHeight,
+  getCapsuleTranslationTextHeight,
+  getCapsuleTranslationWindowWidth,
+  CAPSULE_TRANSLATION_CARD_MAX_WIDTH,
   parseCapsuleStyle,
 } from '../lib/capsuleLayout';
 import { getCapsuleSnapshot, isTauri } from '../lib/ipc';
@@ -40,6 +48,15 @@ import {
   type BackendEvent,
   type TranscriptViewState,
 } from '../lib/backendEvent';
+import {
+  applyLiveTranslationEvent,
+  applyLiveTranslationSessionId,
+  beginLiveTranslationGeneration,
+  clearLiveTranslation,
+  createLiveTranslationState,
+  visibleLiveTranslation,
+  type LiveTranslationViewState,
+} from '../lib/liveTranslation';
 
 // Inject the capsule keyframes once into document.head instead of rendering them in
 // JSX: per-frame (~60Hz) setLevel during recording would otherwise recreate this
@@ -513,6 +530,10 @@ interface ClassicCapsuleProps {
   insertedChars: number;
   message?: string;
   transcript?: string;
+  /** Display-only live translation preview; fills the draft slot when empty. */
+  translationPreview?: string;
+  /** Card layout budget for the translation preview (`maxHeight` in CSS px). */
+  translationCard?: { maxHeight: number };
   transcriptFontSize?: number;
   transcriptVisible?: boolean;
   transcriptInSameWindow?: boolean;
@@ -532,12 +553,15 @@ function ClassicCapsule({
   insertedChars,
   message,
   transcript,
+  translationPreview,
+  translationCard,
   transcriptFontSize = 14,
   transcriptVisible = false,
   transcriptInSameWindow = true,
   operating,
   translation,
 }: ClassicCapsuleProps) {
+  const { t } = useTranslation();
   const hostMetrics = getCapsuleHostMetrics(os, false, 'classic');
   const onCancel = useCallback(() => {
     void cancelDictation();
@@ -546,9 +570,11 @@ function ClassicCapsule({
     void stopDictation();
   }, []);
   const liveText = transcript?.trim() ?? '';
+  const previewText = liveText ? '' : (translationPreview?.trim() ?? '');
+  const railText = liveText || previewText;
   const classicGeometry = getClassicCapsuleGeometry(
     os,
-    transcriptVisible || Boolean(liveText),
+    transcriptVisible || Boolean(railText),
     translation,
     transcriptInSameWindow,
   );
@@ -582,6 +608,15 @@ function ClassicCapsule({
             stageWidth={hostMetrics.width}
             maxWidth={hostMetrics.width - 16}
             height={getCapsuleTranscriptRailHeight('classic')}
+          />
+        )}
+        {previewText && translationCard != null && (
+          <LiveTranslationCard
+            text={previewText}
+            fontSize={transcriptFontSize}
+            maxWidth={CAPSULE_TRANSLATION_CARD_MAX_WIDTH}
+            maxHeight={translationCard.maxHeight}
+            tag={t('capsule.liveTranslationTag')}
           />
         )}
         <ClassicPill
@@ -697,6 +732,11 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
     ),
   );
   const transcriptViewRef = useRef<TranscriptViewState>(createTranscriptViewState());
+  // Display-only live translation preview. Deliberately shares no state with
+  // the transcript (docs/live-translation-preview-design.md §4): the preview
+  // never becomes insertable text.
+  const liveTranslationRef = useRef<LiveTranslationViewState>(createLiveTranslationState());
+  const [liveTranslationText, setLiveTranslationText] = useState('');
   const capsuleStateRef = useRef<CapsuleState>(preview.state);
   const [translation, setTranslation] = useState<boolean>(preview.translation);
   const [selectionPolish, setSelectionPolish] = useState<boolean>(preview.selectionPolish);
@@ -819,6 +859,27 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
         }
         transcriptViewRef.current = nextTranscript;
         if (nextTranscript !== previousTranscript) setLocalAsrText(nextTranscript.text);
+        // Mirror the transcript lifecycle for the translation preview: session
+        // anchor from the payload, new generation at the recording edge, clear
+        // on every terminal state.
+        const previousTranslation = liveTranslationRef.current;
+        let nextTranslation = applyLiveTranslationSessionId(previousTranslation, p.sessionId);
+        const translationSessionChanged = nextTranslation !== previousTranslation;
+        if (p.state === 'recording' && previous !== 'recording' && !translationSessionChanged) {
+          nextTranslation = beginLiveTranslationGeneration(nextTranslation);
+        }
+        if (
+          p.state === 'idle' ||
+          p.state === 'done' ||
+          p.state === 'cancelled' ||
+          p.state === 'error'
+        ) {
+          nextTranslation = clearLiveTranslation(nextTranslation);
+        }
+        liveTranslationRef.current = nextTranslation;
+        if (nextTranslation !== previousTranslation) {
+          setLiveTranslationText(nextTranslation.text);
+        }
         setTranslation(p.translation === true);
         setWarming(p.warming === true);
         setSelectionPolish(p.selectionPolish === true);
@@ -839,6 +900,11 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
           const next = applyTranscriptEvent(transcriptViewRef.current, payload);
           transcriptViewRef.current = next;
           setLocalAsrText(next.text);
+          const nextTranslation = applyLiveTranslationEvent(liveTranslationRef.current, payload);
+          if (nextTranslation !== liveTranslationRef.current) {
+            liveTranslationRef.current = nextTranslation;
+            setLiveTranslationText(nextTranslation.text);
+          }
         }))
       )
         return;
@@ -1028,13 +1094,40 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
   );
   const showLiveTranscript = state !== 'idle' && liveTranscript.length > 0;
   const transcriptVisible = showLiveTranscript && !insertFallback && suggestions.length === 0;
+  // The translation preview only fills the draft slot while that slot is
+  // empty — by design the preview is only planned when no live draft exists,
+  // and the rail never stacks two rows (design §5.3).
+  const liveTranslationPreview = visibleLiveTranslation(
+    liveTranslationText,
+    transcriptEnabled,
+    renderedState,
+    renderedSelectionPolish,
+  );
+  const showTranslationPreview =
+    state !== 'idle' && !showLiveTranscript && liveTranslationPreview.length > 0;
+  const translationPreviewVisible =
+    showTranslationPreview && !insertFallback && suggestions.length === 0;
+  // The native window geometry follows whichever text occupies the rail slot.
+  const capsuleRailVisible = transcriptVisible || translationPreviewVisible;
+  // The wrapped translation card needs a taller rail than the one-line
+  // transcript pill; the native window grows by exactly this budget
+  // (getCapsuleTranslationRailHeight mirrors the Rust override math).
+  const translationTextHeight = getCapsuleTranslationTextHeight(transcriptFontSize);
+  const translationCard = { maxHeight: translationTextHeight };
+  const translationRailHeight = getCapsuleTranslationRailHeight(capsuleStyle, transcriptFontSize);
+  const capsuleRailHeight = translationPreviewVisible ? translationRailHeight : undefined;
+  // The card is wider than the 460px capsule body: the native window must
+  // grow horizontally too, or the webview clips the card at the window edge.
+  const capsuleRailWidth = translationPreviewVisible
+    ? getCapsuleTranslationWindowWidth(capsuleStyle)
+    : undefined;
 
   useEffect(() => {
     if (!isTauri) return;
-    void setCapsuleTranscriptVisible(transcriptVisible).catch((error) =>
-      console.warn('[capsule] transcript visibility sync failed', error),
+    void setCapsuleTranscriptVisible(capsuleRailVisible, capsuleRailHeight, capsuleRailWidth).catch(
+      (error) => console.warn('[capsule] transcript visibility sync failed', error),
     );
-  }, [transcriptVisible]);
+  }, [capsuleRailVisible, capsuleRailHeight, capsuleRailWidth]);
 
   // Always release the native hit-test region when the capsule webview is torn down.
   useEffect(() => {
@@ -1102,8 +1195,12 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
             insertedChars={insertedCharsRef.current}
             message={renderedMessage}
             transcript={splitTranscriptRail ? '' : liveTranscript}
+            translationPreview={
+              splitTranscriptRail || showLiveTranscript ? '' : liveTranslationPreview
+            }
+            translationCard={translationCard}
             transcriptFontSize={transcriptFontSize}
-            transcriptVisible={transcriptVisible}
+            transcriptVisible={capsuleRailVisible}
             transcriptInSameWindow={!splitTranscriptRail}
             operating={operatingRef.current}
             translation={translation}
@@ -1115,6 +1212,10 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
             insertedChars={insertedCharsRef.current}
             message={renderedMessage}
             transcript={splitTranscriptRail ? '' : liveTranscript}
+            translationPreview={
+              splitTranscriptRail || showLiveTranscript ? '' : liveTranslationPreview
+            }
+            translationCard={translationCard}
             transcriptFontSize={transcriptFontSize}
             operating={operatingRef.current}
             translation={translation}
@@ -1180,6 +1281,15 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
                   stageWidth={hostMetrics.width}
                   maxWidth={hostMetrics.width - 24}
                   height={getCapsuleTranscriptRailHeight('siri')}
+                />
+              )}
+              {showTranslationPreview && !splitTranscriptRail && (
+                <LiveTranslationCard
+                  text={liveTranslationPreview}
+                  fontSize={transcriptFontSize}
+                  maxWidth={CAPSULE_TRANSLATION_CARD_MAX_WIDTH}
+                  maxHeight={translationTextHeight}
+                  tag={t('capsule.liveTranslationTag')}
                 />
               )}
               <div

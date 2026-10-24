@@ -7457,6 +7457,15 @@ impl OpenLessBackend {
             options,
         );
         context.pipeline_mode = pipeline_mode;
+        // Display-only live translation preview: freeze the plan at capture so
+        // the runtime gate is a single Option check inside the recorder
+        // decorator (docs/live-translation-preview-design.md §3.2).
+        context.live_translation = crate::live_translation::live_translation_plan(
+            preferences.live_translation_preview_enabled,
+            purpose == DictationContextPurpose::Dictation,
+            options,
+            &context,
+        );
         // Issue #1032: when the LLM channel is not configured, mark the
         // session as eligible for the Raw fallback instead of dispatching a
         // polish request that cannot succeed. The context keeps its original

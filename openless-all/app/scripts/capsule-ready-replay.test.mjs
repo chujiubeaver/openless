@@ -34,6 +34,13 @@ vm.runInNewContext(
   compile(readFileSync(new URL('../src/lib/backendEvent.ts', import.meta.url), 'utf8')),
   backend,
 );
+// The replay effect also feeds the display-only live translation reducer; the
+// sandbox must provide the same bindings the component closure has.
+const translation = { exports: {} };
+vm.runInNewContext(
+  compile(readFileSync(new URL('../src/lib/liveTranslation.ts', import.meta.url), 'utf8')),
+  translation,
+);
 const effectCode = compile(`globalThis.replayEffect = (${effect});`);
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 function deferred() {
@@ -64,10 +71,12 @@ function mount({ snapshot = () => null, beforeListen = async () => {} } = {}) {
   let requests = 0;
   const scope = {
     ...backend.exports,
+    ...translation.exports,
     isTauri: true,
     capsuleStateFirstLogged: true,
     capsuleStateRef: { current: 'idle' },
     transcriptViewRef: { current: backend.exports.createTranscriptViewState() },
+    liveTranslationRef: { current: translation.exports.createLiveTranslationState() },
     stylePreferenceReadyRef: { current: true },
     insertedCharsRef: { current: 0 },
     operatingRef: { current: false },
@@ -103,6 +112,7 @@ function mount({ snapshot = () => null, beforeListen = async () => {} } = {}) {
     'setLevel',
     'setMessage',
     'setLocalAsrText',
+    'setLiveTranslationText',
     'setTranslation',
     'setWarming',
     'setSelectionPolish',

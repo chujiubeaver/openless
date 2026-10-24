@@ -727,6 +727,11 @@ struct CapsuleWindowState {
     cursor_passthrough: AtomicBool,
     hit_test_mode: AtomicU8,
     transcript_visible: AtomicBool,
+    /// Rail-size overrides (logical px) reported by the webview: the wrapped
+    /// live-translation card replaces the per-style single-line rail budget
+    /// and is wider than the capsule body.
+    transcript_rail_height: Mutex<Option<f64>>,
+    transcript_rail_width: Mutex<Option<f64>>,
     style: AtomicU8,
     fallback_card_visible: AtomicBool,
     fallback_presentation_id: AtomicU64,
@@ -747,6 +752,8 @@ impl Default for CapsuleWindowState {
             cursor_passthrough: AtomicBool::new(true),
             hit_test_mode: AtomicU8::new(HIT_TEST_MODE_CAPSULE),
             transcript_visible: AtomicBool::new(false),
+            transcript_rail_height: Mutex::new(None),
+            transcript_rail_width: Mutex::new(None),
             style: AtomicU8::new(0),
             fallback_card_visible: AtomicBool::new(false),
             fallback_presentation_id: AtomicU64::new(0),
@@ -1071,6 +1078,8 @@ impl TauriCapsuleWindow {
             style,
             false,
             translation_active,
+            None,
+            None,
         );
         let bottom_gap = crate::capsule_bottom_gap(style);
 
@@ -1201,6 +1210,15 @@ impl TauriCapsuleWindow {
         ))
     }
 
+    /// Current rail-size overrides from the webview, if any.
+    fn transcript_rail_height_override(&self) -> Option<f64> {
+        *self.state.transcript_rail_height.lock()
+    }
+
+    fn transcript_rail_width_override(&self) -> Option<f64> {
+        *self.state.transcript_rail_width.lock()
+    }
+
     pub(crate) fn position_capsule_bottom_center(&self, translation: bool) -> tauri::Result<()> {
         if let Some(window) = self.window() {
             crate::position_capsule_bottom_center_with_style_and_transcript(
@@ -1208,6 +1226,8 @@ impl TauriCapsuleWindow {
                 translation,
                 self.state.cached_style(),
                 self.state.transcript_visible.load(Ordering::SeqCst),
+                self.transcript_rail_height_override(),
+                self.transcript_rail_width_override(),
             )?;
         }
         Ok(())
@@ -1234,15 +1254,24 @@ impl TauriCapsuleWindow {
         Ok(())
     }
 
-    pub(crate) fn set_transcript_visible(&self, visible: bool) -> tauri::Result<()> {
+    pub(crate) fn set_transcript_visible(
+        &self,
+        visible: bool,
+        rail_height_override: Option<f64>,
+        rail_width_override: Option<f64>,
+    ) -> tauri::Result<()> {
         if !self.state.capsule_visible.load(Ordering::SeqCst) {
             self.state.transcript_visible.store(false, Ordering::SeqCst);
+            *self.state.transcript_rail_height.lock() = None;
+            *self.state.transcript_rail_width.lock() = None;
             self.hide_transcript_overlay();
             return Ok(());
         }
         self.state
             .transcript_visible
             .store(visible, Ordering::SeqCst);
+        *self.state.transcript_rail_height.lock() = if visible { rail_height_override } else { None };
+        *self.state.transcript_rail_width.lock() = if visible { rail_width_override } else { None };
         if self.state.hit_test_mode.load(Ordering::SeqCst) == HIT_TEST_MODE_CARD {
             // Card geometry owns this shared window until dismissal. The card webview may
             // report transcriptVisible=false, but that must not restore capsule bounds.
@@ -1360,6 +1389,8 @@ impl TauriCapsuleWindow {
                 translation_active,
                 style,
                 self.state.transcript_visible.load(Ordering::SeqCst),
+                self.transcript_rail_height_override(),
+                self.transcript_rail_width_override(),
             )
             .is_ok()
         {

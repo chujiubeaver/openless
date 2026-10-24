@@ -1,5 +1,5 @@
 import { animate, motion, useMotionValue, useReducedMotion, useTransform } from 'framer-motion';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import './CapsuleStyles.css';
 import {
@@ -40,7 +40,7 @@ import type {
   UserPreferences,
 } from '../lib/types';
 
-export type LiveTranscriptTone = 'frost' | 'dark';
+export type LiveTranscriptTone = 'frost' | 'dark' | 'translate';
 
 export function CapsuleTranslationBadge({ visible = true }: { visible?: boolean }) {
   const { t } = useTranslation();
@@ -102,6 +102,8 @@ export interface CapsuleTranscriptRailProps {
   maxWidth: number;
   height?: number;
   fontSize?: number;
+  /** Small leading label chip ("EN") marking the display-only translation row. */
+  prefixTag?: string;
 }
 
 /** Transcript is deliberately a sibling rail: the capsule body remains responsible for audio feedback and controls. */
@@ -112,11 +114,13 @@ export function CapsuleTranscriptRail({
   maxWidth,
   height = DEFAULT_PILL_HEIGHT,
   fontSize = FONT_SIZE,
+  prefixTag,
 }: CapsuleTranscriptRailProps) {
   const liveText = text.trim();
   if (!liveText) return null;
   return (
     <div className="ol-capsule-transcript-rail" data-tone={tone} data-transcript-rail="true">
+      {prefixTag && <span className="ol-live-transcript-tag">{prefixTag}</span>}
       <LiveTranscriptPill
         text={liveText}
         tone={tone}
@@ -125,6 +129,157 @@ export function CapsuleTranscriptRail({
         height={height}
         fontSize={fontSize}
       />
+    </div>
+  );
+}
+
+export interface LiveTranslationCardProps {
+  /** Full-text snapshot of the display-only translation preview. */
+  text: string;
+  fontSize?: number;
+  /** Maximum wrapped-text height in this tree's CSS px; overflowing text keeps its tail visible. */
+  maxHeight: number;
+  maxWidth: number;
+  tone?: 'frost' | 'dark';
+  tag?: string;
+}
+
+/** One whitespace-padded word of the translation snapshot, keyed by source offset. */
+interface TranslationWordUnit {
+  key: number;
+  text: string;
+  offset: number;
+  born: boolean;
+}
+
+let translationWordKey = 0;
+
+/**
+ * Word-level diff of the full snapshot: a word that keeps its absolute offset
+ * and text stays mounted (no replay); appended or rewritten words are "born"
+ * and animate in — the same contract the transcript pill applies per glyph.
+ */
+function diffTranslationWords(prev: TranslationWordUnit[], text: string): TranslationWordUnit[] {
+  const tokens: { text: string; offset: number }[] = [];
+  const pattern = /\S+\s*|\s+/g;
+  for (let match = pattern.exec(text); match; match = pattern.exec(text)) {
+    tokens.push({ text: match[0], offset: match.index });
+  }
+  if (tokens.length === 0) return [];
+  const previousByOffset = new Map(prev.map((word) => [word.offset, word]));
+  return tokens.map((token) => {
+    const previous = previousByOffset.get(token.offset);
+    if (previous && previous.text === token.text) {
+      return { ...previous, born: false };
+    }
+    translationWordKey += 1;
+    return { key: translationWordKey, text: token.text, offset: token.offset, born: true };
+  });
+}
+
+/** Birth timing belongs to the keyed word, not to later snapshot revisions. */
+function TranslationWordGlyph({
+  text,
+  born,
+  reduceMotion,
+}: {
+  text: string;
+  born: boolean;
+  reduceMotion: boolean;
+}) {
+  const [isBorn] = useState(born);
+  return (
+    <motion.span
+      className="ol-live-translation-word"
+      initial={
+        reduceMotion || !isBorn
+          ? false
+          : {
+              opacity: 0,
+              y: INSERT_TEXT_MOTION.bornY,
+              filter: `blur(${INSERT_TEXT_MOTION.bornBlurPx}px)`,
+            }
+      }
+      animate={{ opacity: 1, y: 0, filter: 'blur(0px)' }}
+      transition={
+        reduceMotion
+          ? { duration: 0 }
+          : {
+              opacity: {
+                duration: INSERT_TEXT_MOTION.bornFadeMs / 1000,
+                ease: [0.22, 0.61, 0.36, 1],
+              },
+              y: { type: 'spring', ...INSERT_TEXT_MOTION.charSpring },
+              filter: {
+                duration: INSERT_TEXT_MOTION.bornFadeMs / 1000,
+                ease: [0.22, 0.61, 0.36, 1],
+              },
+            }
+      }
+    >
+      {text}
+    </motion.span>
+  );
+}
+
+/**
+ * Multi-line translation preview card. The snapshot wraps top-to-bottom; each
+ * newly appended word is born with the transcript pill's fade/rise/spring so
+ * the streaming feel matches the single-line draft. When the text outgrows
+ * `maxHeight` the newest lines stay visible and only then does the top fade.
+ */
+export function LiveTranslationCard({
+  text,
+  fontSize = FONT_SIZE,
+  maxHeight,
+  maxWidth,
+  tone = 'frost',
+  tag,
+}: LiveTranslationCardProps) {
+  const reduceMotion = useReducedMotion();
+  const liveText = text.trim();
+  const [units, setUnits] = useState<TranslationWordUnit[]>(() => diffTranslationWords([], ''));
+  const [seenText, setSeenText] = useState('');
+  const [overflowed, setOverflowed] = useState(false);
+  const frameRef = useRef<HTMLDivElement>(null);
+  if (liveText !== seenText) {
+    setSeenText(liveText);
+    setUnits((prev) => diffTranslationWords(prev, liveText));
+  }
+  // The top fade must only exist when lines are actually hidden; otherwise it
+  // eats the first visible line (user report 2026-10).
+  useLayoutEffect(() => {
+    const frame = frameRef.current;
+    if (!frame) return;
+    setOverflowed(frame.scrollHeight > frame.clientHeight + 1);
+  }, [units, maxHeight, fontSize]);
+
+  if (!liveText) return null;
+  return (
+    <div
+      className="ol-capsule-transcript-rail ol-capsule-transcript-rail--translation"
+      data-transcript-rail="true"
+    >
+      <div className="ol-live-translation-card" data-tone={tone} style={{ maxWidth, fontSize }}>
+        {tag && <span className="ol-live-transcript-tag">{tag}</span>}
+        <div
+          className="ol-live-translation-frame"
+          ref={frameRef}
+          data-overflowed={overflowed ? 'true' : 'false'}
+          style={{ maxHeight }}
+        >
+          <div className="ol-live-translation-text">
+            {units.map((unit) => (
+              <TranslationWordGlyph
+                key={unit.key}
+                text={unit.text}
+                born={unit.born}
+                reduceMotion={Boolean(reduceMotion)}
+              />
+            ))}
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

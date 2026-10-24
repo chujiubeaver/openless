@@ -40,6 +40,7 @@ pub mod host_document;
 mod hotkey_interpreter;
 pub mod language_catalog;
 mod less_computer;
+pub mod live_translation;
 pub mod llm_gemini;
 pub mod llm_protocol;
 mod marketplace;
@@ -270,6 +271,14 @@ pub use events::{
 pub use external_audio::{AudioRecorderRouter, ExternalAudioRecorder};
 pub use history::{HistoryStore, HISTORY_CAP};
 pub use less_computer::LessComputerService;
+pub use live_translation::{
+    live_translation_plan, live_translation_sink, LiveTranslationPlan, LiveTranslationRecorder,
+    LiveTranslationSink, LiveTranslationSinkProvider, LiveTranslationStatus,
+    LiveTranslationUpdate, LiveTranslatorFactory, LiveTranslatorSession,
+    PublisherLiveTranslationSink, QwenLiveTranslatorFactory, TeeAudioConsumer,
+    LIVE_TRANSLATION_FINISH_GRACE, LIVE_TRANSLATION_TARGET_LANGUAGE,
+    MAX_PENDING_TRANSLATION_AUDIO_BYTES,
+};
 pub use local_asr_catalog::{
     normalize_foundry_language_hint, normalize_sherpa_language_hint, FoundryRuntimeSource,
     LocalAsrExecutionMode, LocalAsrMirror, LocalAsrModelId, LocalAsrRuntime, LocalAsrTarget,

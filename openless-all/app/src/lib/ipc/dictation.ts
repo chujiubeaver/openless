@@ -14,9 +14,22 @@ export function cancelDictation(): Promise<void> {
   return invokeOrMock('cancel_dictation', undefined, () => undefined);
 }
 
-export function setCapsuleTranscriptVisible(visible: boolean): Promise<void> {
+/**
+ * Sync the native rail slot. `railHeight` (logical px) overrides the per-style
+ * single-line rail budget — the multi-line live translation card uses it to
+ * grow the capsule window; omit it for the transcript rail's default sizing.
+ */
+export function setCapsuleTranscriptVisible(
+  visible: boolean,
+  railHeight?: number,
+  railWidth?: number,
+): Promise<void> {
   if (!isDesktop()) return Promise.resolve();
-  return invokeOrMock('set_capsule_transcript_visible', { visible }, () => undefined);
+  return invokeOrMock(
+    'set_capsule_transcript_visible',
+    { visible, railHeight: railHeight ?? null, railWidth: railWidth ?? null },
+    () => undefined,
+  );
 }
 
 /** Latest native capsule frame, used by the separate Windows rail after its webview is ready. */
