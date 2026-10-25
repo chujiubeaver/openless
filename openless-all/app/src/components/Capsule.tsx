@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type Ref,
+} from 'react';
 import { useTranslation } from 'react-i18next';
 import { detectOS, type OS } from './WindowChrome';
 import { warmUpSiriShaders } from './SiriGL';
@@ -25,8 +33,6 @@ import {
   getCapsulePillMetrics,
   getClassicCapsuleGeometry,
   getCapsuleTranscriptRailHeight,
-  getCapsuleLingeringBottomOffset,
-  getCapsuleTranslationCardHeight,
   getCapsuleTranslationRailHeight,
   getCapsuleTranslationTextHeight,
   getCapsuleTranslationWindowWidth,
@@ -216,6 +222,8 @@ interface ClassicCapsuleProps {
   translationPreview?: string;
   /** Card layout budget for the translation preview (`maxHeight` in CSS px). */
   translationCard?: { maxHeight: number };
+  /** Attached to the preview card so the host can measure its on-screen box. */
+  translationCardRef?: Ref<HTMLDivElement>;
   transcriptFontSize?: number;
   transcriptVisible?: boolean;
   transcriptInSameWindow?: boolean;
@@ -239,6 +247,7 @@ function ClassicCapsule({
   transcript,
   translationPreview,
   translationCard,
+  translationCardRef,
   transcriptFontSize = 14,
   transcriptVisible = false,
   transcriptInSameWindow = true,
@@ -303,6 +312,7 @@ function ClassicCapsule({
             maxWidth={CAPSULE_TRANSLATION_CARD_MAX_WIDTH}
             maxHeight={translationCard.maxHeight}
             tag={t('capsule.liveTranslationTag')}
+            cardRef={translationCardRef}
           />
         )}
         <OpenLessPill
@@ -427,6 +437,22 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
   const liveTranslationRef = useRef<LiveTranslationViewState>(createLiveTranslationState());
   const [liveTranslationText, setLiveTranslationText] = useState('');
   const [liveTranslationLingering, setLiveTranslationLingering] = useState(false);
+  // The lingering card must not move when the session body disappears, so its
+  // real on-screen rect is measured while the session is still rendered and the
+  // compact native window is then pinned to exactly that box.
+  const translationCardRef = useRef<HTMLDivElement | null>(null);
+  const translationPreviewRectRef = useRef<{
+    width: number;
+    height: number;
+    top: number;
+    left: number;
+  } | null>(null);
+  const [lingeringCardRect, setLingeringCardRect] = useState<{
+    width: number;
+    height: number;
+    top: number;
+    left: number;
+  } | null>(null);
   const capsuleStateRef = useRef<CapsuleState>(preview.state);
   const [translation, setTranslation] = useState<boolean>(preview.translation);
   const [selectionPolish, setSelectionPolish] = useState<boolean>(preview.selectionPolish);
@@ -871,24 +897,65 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
     };
   }, []);
 
+  // Measure the card while the session body still owns the layout, so the
+  // compact lingering window can be pinned to exactly the box the card already
+  // occupies. Native keeps the capsule window's top-left and shifts it by the
+  // measured insets, then sizes it to the card: the card cannot drift, drop, or
+  // clip when the orb/pill underneath disappears (user report 2026-10).
+  useLayoutEffect(() => {
+    const node = translationCardRef.current;
+    if (!node) return;
+    const rect = node.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return;
+    if (!liveTranslationLingering) {
+      translationPreviewRectRef.current = {
+        width: rect.width,
+        height: rect.height,
+        top: rect.top,
+        left: rect.left,
+      };
+      // Drop the previous episode's box so the swap can never send a stale one.
+      setLingeringCardRect((prev) => (prev == null ? prev : null));
+      return;
+    }
+    const pinned = translationPreviewRectRef.current;
+    const next = {
+      width: Math.ceil(pinned?.width ?? rect.width),
+      height: Math.ceil(pinned?.height ?? rect.height) + 2,
+      top: Math.max(0, Math.round(pinned?.top ?? 0)),
+      left: Math.max(0, Math.round(pinned?.left ?? 0)),
+    };
+    setLingeringCardRect((prev) =>
+      prev &&
+      prev.width === next.width &&
+      prev.height === next.height &&
+      prev.top === next.top &&
+      prev.left === next.left
+        ? prev
+        : next,
+    );
+  }, [liveTranslationLingering, liveTranslationText, transcriptFontSize, capsuleStyle]);
+
   // Tell the native host to swap the capsule window for the compact lingering
-  // card window (raised so the card does not move when the session body hides).
+  // card window, pinned to the measured box. Waits for that measurement so the
+  // swap is a single, exact geometry change instead of an estimate + correction.
   useEffect(() => {
     if (!isTauri) return;
     if (liveTranslationLingering) {
-      const cardHeight = getCapsuleTranslationCardHeight(transcriptFontSize) + 6;
+      if (!lingeringCardRect) return;
       void setCapsuleTranslationLingering(
         true,
-        getCapsuleTranslationWindowWidth(capsuleStyle),
-        cardHeight,
-        getCapsuleLingeringBottomOffset(os, capsuleStyle),
+        lingeringCardRect.width,
+        lingeringCardRect.height,
+        lingeringCardRect.top,
+        lingeringCardRect.left,
       ).catch((error) => console.warn('[capsule] translation lingering sync failed', error));
     } else {
       void setCapsuleTranslationLingering(false).catch((error) =>
         console.warn('[capsule] translation lingering sync failed', error),
       );
     }
-  }, [liveTranslationLingering, capsuleStyle, transcriptFontSize, os]);
+  }, [liveTranslationLingering, lingeringCardRect]);
 
   // Dismiss a lingering translation card (Esc, close button, or new session).
   const dismissLingeringTranslation = useCallback(() => {
@@ -950,8 +1017,10 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
           display: 'flex',
           flexDirection: 'column',
           alignItems: 'center',
-          justifyContent: 'flex-end',
-          paddingBottom: 4,
+          // The card sits flush with the window's top edge; the native host
+          // shifts the compact window down by the measured inset instead, so
+          // the card stays exactly where it was while the session was live.
+          justifyContent: 'flex-start',
           boxSizing: 'border-box',
           background: 'transparent',
         }}
@@ -963,6 +1032,7 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
           maxHeight={translationTextHeight}
           tag={t('capsule.liveTranslationTag')}
           interactive
+          cardRef={translationCardRef}
           onClose={dismissLingeringTranslation}
           onDragStart={() => void beginCapsuleTranslationDrag()}
           onDragMove={(dx, dy) => void dragCapsuleTranslation(dx, dy)}
@@ -1017,6 +1087,7 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
             transcript={splitTranscriptRail ? '' : liveTranscript}
             translationPreview={splitTranscriptRail || showLiveTranscript ? '' : cardText}
             translationCard={translationCard}
+            translationCardRef={translationCardRef}
             transcriptFontSize={transcriptFontSize}
             transcriptVisible={capsuleRailVisible}
             transcriptInSameWindow={!splitTranscriptRail}
@@ -1093,6 +1164,7 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
                   maxWidth={CAPSULE_TRANSLATION_CARD_MAX_WIDTH}
                   maxHeight={translationTextHeight}
                   tag={t('capsule.liveTranslationTag')}
+                  cardRef={translationCardRef}
                 />
               )}
               <div

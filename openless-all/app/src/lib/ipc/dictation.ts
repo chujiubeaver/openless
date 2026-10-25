@@ -34,18 +34,22 @@ export function setCapsuleTranscriptVisible(
 
 /**
  * Keep the capsule window open after the session ends so the wrapped
- * translation card stays readable until Esc or the next session.
+ * translation card stays readable until Esc or the next session. The window is
+ * swapped for a compact one pinned to the card's measured box: the insets are
+ * how far the card sat from the capsule window's top-left while the session was
+ * live, so the card cannot move when the session body disappears.
  */
 export function setCapsuleTranslationLingering(
   active: boolean,
   cardWidth = 0,
   cardHeight = 0,
-  bottomOffset = 0,
+  cardTopInset = 0,
+  cardLeftInset = 0,
 ): Promise<void> {
   if (!isDesktop()) return Promise.resolve();
   return invokeOrMock(
     'set_capsule_translation_lingering',
-    { active, cardWidth, cardHeight, bottomOffset },
+    { active, cardWidth, cardHeight, cardTopInset, cardLeftInset },
     () => undefined,
   );
 }

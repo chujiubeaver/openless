@@ -85,16 +85,21 @@ pub async fn set_capsule_translation_lingering(
     active: bool,
     card_width: f64,
     card_height: f64,
-    bottom_offset: f64,
+    card_top_inset: f64,
+    card_left_inset: f64,
 ) -> Result<(), String> {
     let host = coord.tauri_host();
     let Some(capsule) = host.capsule_window() else {
         return Ok(());
     };
     host.run_on_main_thread(move || {
-        if let Err(error) =
-            capsule.set_translation_lingering(active, card_width, card_height, bottom_offset)
-        {
+        if let Err(error) = capsule.set_translation_lingering(
+            active,
+            card_width,
+            card_height,
+            card_top_inset,
+            card_left_inset,
+        ) {
             log::warn!("[capsule] translation lingering layout failed: {error}");
         }
     })

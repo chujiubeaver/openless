@@ -1,5 +1,13 @@
 import { animate, motion, useMotionValue, useReducedMotion, useTransform } from 'framer-motion';
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import {
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent,
+  type Ref,
+} from 'react';
 import { useTranslation } from 'react-i18next';
 import './CapsuleStyles.css';
 import {
@@ -134,12 +142,14 @@ export interface LiveTranslationCardProps {
   maxWidth: number;
   tone?: 'frost' | 'dark';
   tag?: string;
-  /** Lingering mode: adds a drag strip + close button and makes the text selectable. */
+  /** Lingering mode: the card chrome drags the window and the text is selectable. */
   interactive?: boolean;
   onClose?: () => void;
   onDragStart?: () => void;
   onDragMove?: (dx: number, dy: number) => void;
   onDragEnd?: () => void;
+  /** Attached to the card box so the host can measure its real on-screen rect. */
+  cardRef?: Ref<HTMLDivElement>;
 }
 
 /** One whitespace-padded word of the translation snapshot, keyed by source offset. */
@@ -238,6 +248,7 @@ export function LiveTranslationCard({
   onDragStart,
   onDragMove,
   onDragEnd,
+  cardRef,
 }: LiveTranslationCardProps) {
   const dragOrigin = useRef<{ x: number; y: number } | null>(null);
   const reduceMotion = useReducedMotion();
@@ -258,6 +269,31 @@ export function LiveTranslationCard({
     setOverflowed(frame.scrollHeight > frame.clientHeight + 1);
   }, [units, maxHeight, fontSize]);
 
+  // The whole card chrome drags the window — every edge, not just a top strip.
+  // The wrapped text and the close button are excluded so selecting text and
+  // clicking × keep working inside the same surface.
+  const handleDragPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (!interactive || event.button !== 0) return;
+    const target = event.target as HTMLElement;
+    if (target.closest('.ol-live-translation-frame') || target.closest('button')) return;
+    dragOrigin.current = { x: event.screenX, y: event.screenY };
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    onDragStart?.();
+  };
+  const handleDragPointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (!dragOrigin.current) return;
+    onDragMove?.(
+      event.screenX - dragOrigin.current.x,
+      event.screenY - dragOrigin.current.y,
+    );
+  };
+  const handleDragPointerEnd = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (!dragOrigin.current) return;
+    dragOrigin.current = null;
+    event.currentTarget.releasePointerCapture?.(event.pointerId);
+    onDragEnd?.();
+  };
+
   if (!liveText) return null;
   return (
     <div
@@ -269,28 +305,12 @@ export function LiveTranslationCard({
         data-tone={tone}
         data-interactive={interactive ? 'true' : 'false'}
         style={{ maxWidth, fontSize }}
+        ref={cardRef}
+        onPointerDown={handleDragPointerDown}
+        onPointerMove={handleDragPointerMove}
+        onPointerUp={handleDragPointerEnd}
+        onPointerCancel={handleDragPointerEnd}
       >
-        {interactive && (
-          <div
-            className="ol-live-translation-dragzone"
-            onPointerDown={(event) => {
-              dragOrigin.current = { x: event.screenX, y: event.screenY };
-              (event.target as HTMLElement).setPointerCapture?.(event.pointerId);
-              onDragStart?.();
-            }}
-            onPointerMove={(event) => {
-              if (!dragOrigin.current) return;
-              onDragMove?.(
-                event.screenX - dragOrigin.current.x,
-                event.screenY - dragOrigin.current.y,
-              );
-            }}
-            onPointerUp={() => {
-              dragOrigin.current = null;
-              onDragEnd?.();
-            }}
-          />
-        )}
         {interactive && (
           <button
             type="button"

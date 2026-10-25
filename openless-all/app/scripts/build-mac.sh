@@ -21,7 +21,7 @@ if [ -z "${APPLE_CERTIFICATE:-}" ] && [ -z "${APPLE_SIGNING_IDENTITY:-}" ]; then
   export APPLE_SIGNING_IDENTITY="-"
   echo "▶ 未检测到 Apple 签名证书，使用 ad-hoc 签名（下载分发仍会触发 Gatekeeper）"
 else
-  echo "▶ 检测到 Apple 签名环境，交给 Tauri 做 Developer ID 签名 / 公证"
+  echo "▶ 使用签名身份：${APPLE_SIGNING_IDENTITY:-<APPLE_CERTIFICATE>}（交给 Tauri 签名；有公证凭据时才做公证）"
 fi
 
 source scripts/macos-build-env.sh
@@ -152,11 +152,17 @@ if [ "$INSTALL" = "1" ]; then
   echo "▶ 装到 /Applications"
   pkill -f "OpenLess.app/Contents/MacOS/openless" 2> /dev/null || true
   sleep 1
-  # Reset TCC before every reinstall: the ad-hoc signing hash changes on each build, so old
-  # authorizations break immediately; without a reset, "checked in System Settings" silently
-  # stops working.
-  tccutil reset Accessibility com.openless.app 2> /dev/null || true
-  tccutil reset Microphone com.openless.app 2> /dev/null || true
+  # Ad-hoc signatures change cdhash on every build, so the previous grants stop
+  # matching and "checked in System Settings" silently breaks — reset them so the
+  # app re-prompts instead of failing quietly. A stable signing identity (see
+  # scripts/dev-deploy-mac.sh) keeps the same designated requirement across
+  # builds, so Microphone/Accessibility grants survive and must NOT be reset.
+  if [ "${APPLE_SIGNING_IDENTITY:-}" = "-" ]; then
+    tccutil reset Accessibility com.openless.app 2> /dev/null || true
+    tccutil reset Microphone com.openless.app 2> /dev/null || true
+  else
+    echo "▶ 使用稳定签名身份 ${APPLE_SIGNING_IDENTITY:-<default>}，保留已有 TCC 授权"
+  fi
   rm -rf /Applications/OpenLess.app
   cp -R "$APP" /Applications/
   xattr -dr com.apple.quarantine /Applications/OpenLess.app 2> /dev/null || true

@@ -471,9 +471,17 @@
   position: relative;
 }
 
+/* Every edge of the card is a drag handle (the padding ring), not just a top
+   strip; the wrapped text and the close button keep their own behavior. */
 .ol-live-translation-card[data-interactive='true'] {
   pointer-events: auto;
-  cursor: default;
+  padding: 12px 30px 12px 14px;
+  cursor: grab;
+  touch-action: none;
+}
+
+.ol-live-translation-card[data-interactive='true']:active {
+  cursor: grabbing;
 }
 
 .ol-live-translation-card[data-interactive='true'] .ol-live-translation-text {
@@ -482,17 +490,8 @@
   cursor: text;
 }
 
-.ol-live-translation-dragzone {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 26px;
-  height: 14px;
-  cursor: grab;
-}
-
-.ol-live-translation-dragzone:active {
-  cursor: grabbing;
+.ol-live-translation-card[data-interactive='true'] .ol-live-translation-frame {
+  cursor: text;
 }
 
 .ol-live-translation-close {

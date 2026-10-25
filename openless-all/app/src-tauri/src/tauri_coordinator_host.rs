@@ -859,11 +859,16 @@ struct CapsuleWindowState {
     /// The wrapped translation card outlives its recording session (until Esc
     /// or the next session) and keeps the capsule window open through Idle.
     translation_lingering: AtomicBool,
-    /// Lingering card window geometry (logical px): the card owns a compact
-    /// window raised above the normal capsule dock so it never moves when the
-    /// session body disappears.
+    /// Lingering card window geometry (logical px) as measured by the webview:
+    /// the card owns a compact window pinned to the exact box it occupied while
+    /// the session was live, so it never moves when the session body disappears.
     lingering_card_size: Mutex<(f64, f64)>,
-    lingering_bottom_offset: Mutex<f64>,
+    /// Distance from the capsule window's top-left corner to the card's
+    /// top-left corner, measured by the webview while the session was live.
+    lingering_card_inset: Mutex<(f64, f64)>,
+    /// Capsule window top-left (physical px) captured when lingering started;
+    /// the compact window is placed at anchor + top inset.
+    lingering_anchor: Mutex<Option<(i32, i32)>>,
     /// Drag session origin (window position at pointer-down) for free placement.
     drag_origin: Mutex<Option<(i32, i32)>>,
     free_position: AtomicBool,
@@ -898,7 +903,8 @@ impl Default for CapsuleWindowState {
             transcript_rail_width: Mutex::new(None),
             translation_lingering: AtomicBool::new(false),
             lingering_card_size: Mutex::new((0.0, 0.0)),
-            lingering_bottom_offset: Mutex::new(0.0),
+            lingering_card_inset: Mutex::new((0.0, 0.0)),
+            lingering_anchor: Mutex::new(None),
             drag_origin: Mutex::new(None),
             free_position: AtomicBool::new(false),
             style: AtomicU8::new(0),
@@ -1642,18 +1648,25 @@ impl TauriCapsuleWindow {
 
     /// Keep the capsule window open after the session ends so the wrapped
     /// translation card stays readable; the webview renders the card alone.
+    ///
+    /// The webview measures the card's real box and reports it here, so the
+    /// compact window can be pinned to the exact screen position the card
+    /// already had: the insets are the card's top-left offset from this window's
+    /// top-left while the session body was still rendered.
     pub(crate) fn set_translation_lingering(
         &self,
         active: bool,
         card_width: f64,
         card_height: f64,
-        bottom_offset: f64,
+        card_top_inset: f64,
+        card_left_inset: f64,
     ) -> tauri::Result<()> {
         let was = self.state.translation_lingering.swap(active, Ordering::SeqCst);
         crate::hotkey::set_translation_lingering_hotkey(active);
         if active {
             *self.state.lingering_card_size.lock() = (card_width, card_height);
-            *self.state.lingering_bottom_offset.lock() = bottom_offset;
+            *self.state.lingering_card_inset.lock() =
+                (card_top_inset.max(0.0), card_left_inset.max(0.0));
         }
         if was == active {
             if active {
@@ -1663,6 +1676,7 @@ impl TauriCapsuleWindow {
         }
         if !active {
             *self.state.drag_origin.lock() = None;
+            *self.state.lingering_anchor.lock() = None;
             self.state.free_position.store(false, Ordering::SeqCst);
             let idle = self
                 .state
@@ -1680,38 +1694,63 @@ impl TauriCapsuleWindow {
                 let _ = self.hide();
             }
         } else {
+            // Capture the docked window's top-left BEFORE resizing: the card is
+            // placed at anchor + inset, which is where it already was on screen.
+            if let Some(window) = self.window() {
+                if let Ok(position) = window.outer_position() {
+                    *self.state.lingering_anchor.lock() = Some((position.x, position.y));
+                }
+            }
             self.position_lingering_card();
+            // A cancelled session collapses the capsule with a 0ms auto-hide,
+            // which can beat this IPC (it follows a React commit). Re-show so the
+            // card the webview is already rendering is actually on screen.
+            if let Some(window) = self.window() {
+                if !window.is_visible().unwrap_or(false) {
+                    self.show_for_recording(false);
+                }
+            }
         }
         Ok(())
     }
 
-    /// Place the compact lingering-card window: same horizontal center as the
-    /// capsule but raised by the stored offset so the card does not move when
-    /// the session body disappears. Honors a user drag (free_position).
+    /// Place the compact lingering-card window on the box the card occupied
+    /// while the session was live (anchor + measured inset). Honors a user drag
+    /// (free_position) and keeps the top-left fixed across a resize, so a later
+    /// height correction can never shift the card.
     fn position_lingering_card(&self) {
-        if self.state.free_position.load(Ordering::SeqCst) {
-            return;
-        }
         let Some(window) = self.window() else {
             return;
         };
         let (width, height) = *self.state.lingering_card_size.lock();
-        let offset = *self.state.lingering_bottom_offset.lock();
         if width <= 0.0 || height <= 0.0 {
             return;
         }
-        let style = self.state.cached_style();
+        let (top_inset, left_inset) = *self.state.lingering_card_inset.lock();
+        let before = window.outer_position().ok();
+        let _ = window.set_size(tauri::LogicalSize::new(width, height));
+        if self.state.free_position.load(Ordering::SeqCst) {
+            if let Some(position) = before {
+                let _ = window.set_position(position);
+            }
+            return;
+        }
+        if let Some((x, y)) = *self.state.lingering_anchor.lock() {
+            let scale = window.scale_factor().unwrap_or(1.0);
+            let _ = window.set_position(tauri::PhysicalPosition::new(
+                x + (left_inset * scale).round() as i32,
+                y + (top_inset * scale).round() as i32,
+            ));
+            return;
+        }
+        // No anchor (window was hidden when lingering started): fall back to the
+        // capsule dock so the card is at least where the capsule would have been.
         #[cfg(target_os = "macos")]
         if let Some(mon) = crate::capsule_target_monitor(&window) {
-            let gap = crate::capsule_bottom_gap(style) + offset;
+            let gap = crate::capsule_bottom_gap(self.state.cached_style());
             let (x, y) =
                 crate::bottom_center_position(mon.logical_work_area(), width, height, gap);
-            let _ = window.set_size(tauri::LogicalSize::new(width, height));
             let _ = window.set_position(tauri::LogicalPosition::new(x, y));
-        }
-        #[cfg(not(target_os = "macos"))]
-        {
-            let _ = (window, style, width, height, offset);
         }
     }
 
@@ -1748,7 +1787,7 @@ impl TauriCapsuleWindow {
         if !self.state.translation_lingering.load(Ordering::SeqCst) {
             return false;
         }
-        if self.set_translation_lingering(false, 0.0, 0.0, 0.0).is_err() {
+        if self.set_translation_lingering(false, 0.0, 0.0, 0.0, 0.0).is_err() {
             return false;
         }
         let _ = self.set_cursor_passthrough(true);
@@ -2115,7 +2154,7 @@ impl TauriCapsuleWindow {
                 CapsuleState::Recording | CapsuleState::Transcribing | CapsuleState::Polishing
             )
         {
-            let _ = self.set_translation_lingering(false, 0.0, 0.0, 0.0);
+            let _ = self.set_translation_lingering(false, 0.0, 0.0, 0.0, 0.0);
         }
 
         {
