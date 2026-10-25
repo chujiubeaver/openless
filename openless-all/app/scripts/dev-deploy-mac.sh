@@ -81,19 +81,34 @@ fi
 echo "▶ 启动应用"
 open "$INSTALLED"
 
-echo "▶ 等待启动日志（12s）…"
-sleep 12
+new_log() {
+  [ -f "$LOG" ] && tail -c +"$((LOG_OFFSET + 1))" "$LOG" 2>/dev/null || true
+}
 
-NEW=""
-if [ -f "$LOG" ]; then
-  NEW="$(tail -c +"$((LOG_OFFSET + 1))" "$LOG" || true)"
+# 启动阶段有两道可能需要用户点一下的关卡，脚本会把它们明确报出来：
+#   1. 钥匙串 ACL：换了签名身份后，读取凭据会弹「OpenLess 想使用你保存在钥匙串中的
+#      机密信息」，应用会**阻塞**在启动早期（SecurityAgent 在跑、启动 banner 不出现）。
+#   2. TCC：辅助功能 / 麦克风。
+echo "▶ 等待启动 banner（最多 30s）…"
+STARTED=0
+for _ in $(seq 1 15); do
+  sleep 2
+  if new_log | grep -q "OpenLess 启动"; then
+    STARTED=1
+    break
+  fi
+done
+
+KEYCHAIN_BLOCKED=0
+if [ "$STARTED" != "1" ] && pgrep -x SecurityAgent > /dev/null 2>&1; then
+  KEYCHAIN_BLOCKED=1
 fi
 
-if [ -z "$NEW" ]; then
-  echo "  日志还没有新内容，再等 8s…"
-  sleep 8
-  [ -f "$LOG" ] && NEW="$(tail -c +"$((LOG_OFFSET + 1))" "$LOG" || true)"
+if [ "$STARTED" = "1" ]; then
+  echo "▶ 应用已启动，再等 10s 收集权限相关日志…"
+  sleep 10
 fi
+NEW="$(new_log)"
 
 MISSING_AX=0
 MISSING_MIC=0
@@ -113,26 +128,39 @@ case "$MIC_STATE" in
 esac
 
 echo
-echo "── 权限自检 ─────────────────────────────────────────────"
-if [ "$MISSING_AX" = "1" ]; then
-  echo "✗ 辅助功能：未授权 —— Fn+Esc / Ctrl+Esc 全局快捷键、录音中 Esc 取消都依赖它"
-  echo "  已为你打开设置面板，请把 OpenLess 打开（首次需要重启应用，脚本会等你）"
-  open "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
-else
-  echo "✓ 辅助功能：已授权（全局快捷键可用）"
+echo "── 部署自检 ─────────────────────────────────────────────"
+if [ "$KEYCHAIN_BLOCKED" = "1" ]; then
+  echo "⚠ 钥匙串授权弹窗拦住了启动（SecurityAgent 正在运行，日志里没有启动 banner）"
+  echo "  屏幕上应该有「OpenLess 想使用你保存在钥匙串中的机密信息」——请点「始终允许」。"
+  echo "  换签名身份后每个钥匙串项只会问一次；点完之后应用会自己继续启动。"
+  echo "  全部点完可以再跑一次做权限自检：SKIP_BUILD=1 ./scripts/dev-deploy-mac.sh"
+elif [ "$STARTED" != "1" ]; then
+  echo "⚠ 30s 内没看到启动 banner，应用可能还在初始化（或弹窗被挡住了）"
 fi
 
-if [ "$MISSING_MIC" = "1" ]; then
-  echo "✗ 麦克风：被拒绝"
-  echo "  已为你打开设置面板，请把 OpenLess 的开关打开"
-  open "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone"
-elif [ "$MIC_STATE" = "NotDetermined" ]; then
-  echo "… 麦克风：应用正在请求授权，请在弹窗里点「允许」"
-elif [ "$MIC_STATE" = "Granted" ]; then
-  echo "✓ 麦克风：已授权"
-else
-  echo "? 麦克风：日志里还没看到授权状态（应用可能还在启动）；录音时若没声音请检查"
-  echo "  系统设置 → 隐私与安全性 → 麦克风 → OpenLess"
+if [ "$STARTED" = "1" ]; then
+  if [ "$MISSING_AX" = "1" ]; then
+    echo "✗ 辅助功能：未授权 —— Fn+Esc / Ctrl+Esc 全局快捷键、录音中 Esc 取消都依赖它"
+    echo "  已为你打开设置面板，请把 OpenLess 打开（应用每 3s 自动重试，不用重启）"
+    open "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
+  elif [ -n "$NEW" ]; then
+    echo "✓ 辅助功能：已授权（全局快捷键可用）"
+  else
+    echo "? 辅助功能：日志里没有相关记录，无法判断"
+  fi
+
+  if [ "$MISSING_MIC" = "1" ]; then
+    echo "✗ 麦克风：被拒绝"
+    echo "  已为你打开设置面板，请把 OpenLess 的开关打开"
+    open "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone"
+  elif [ "$MIC_STATE" = "NotDetermined" ]; then
+    echo "… 麦克风：应用正在请求授权，请在弹窗里点「允许」"
+  elif [ "$MIC_STATE" = "Granted" ]; then
+    echo "✓ 麦克风：已授权"
+  else
+    echo "? 麦克风：日志里还没看到授权状态；录音时若没声音请检查"
+    echo "  系统设置 → 隐私与安全性 → 麦克风 → OpenLess"
+  fi
 fi
 echo "────────────────────────────────────────────────────────"
 echo "✓ 部署完成：${INSTALLED}（bundle id ${BUNDLE_ID}）"

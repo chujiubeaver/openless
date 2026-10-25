@@ -1727,20 +1727,32 @@ impl TauriCapsuleWindow {
             return;
         }
         let (top_inset, left_inset) = *self.state.lingering_card_inset.lock();
-        let before = window.outer_position().ok();
-        let _ = window.set_size(tauri::LogicalSize::new(width, height));
-        if self.state.free_position.load(Ordering::SeqCst) {
-            if let Some(position) = before {
-                let _ = window.set_position(position);
-            }
+        let scale = window.scale_factor().unwrap_or(1.0);
+        let current = window.outer_position().ok();
+        // A drag owns the placement; otherwise pin to the captured anchor.
+        let target = if self.state.free_position.load(Ordering::SeqCst) {
+            current
+        } else {
+            (*self.state.lingering_anchor.lock()).map(|(x, y)| {
+                tauri::PhysicalPosition::new(
+                    x + (left_inset * scale).round() as i32,
+                    y + (top_inset * scale).round() as i32,
+                )
+            })
+        };
+        // The layout watch re-asserts this every 500 ms while a card lingers, and
+        // a no-op resize still makes macOS deliver resize/move notifications into
+        // the webview — skip the window-server round trips when nothing changed.
+        let size_matches = window.outer_size().ok().is_some_and(|size| {
+            (size.width as f64 / scale - width).abs() < 1.0
+                && (size.height as f64 / scale - height).abs() < 1.0
+        });
+        if size_matches && target == current {
             return;
         }
-        if let Some((x, y)) = *self.state.lingering_anchor.lock() {
-            let scale = window.scale_factor().unwrap_or(1.0);
-            let _ = window.set_position(tauri::PhysicalPosition::new(
-                x + (left_inset * scale).round() as i32,
-                y + (top_inset * scale).round() as i32,
-            ));
+        let _ = window.set_size(tauri::LogicalSize::new(width, height));
+        if let Some(position) = target {
+            let _ = window.set_position(position);
             return;
         }
         // No anchor (window was hidden when lingering started): fall back to the

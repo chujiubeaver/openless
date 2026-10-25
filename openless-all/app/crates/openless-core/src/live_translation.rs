@@ -467,9 +467,28 @@ impl LiveTranslationSetup {
         let factory = Arc::clone(&self.factory);
         let sink = session.sink();
         self.task_spawner.spawn(Box::pin(async move {
+            // Per-session marker with no translated content: it is what makes
+            // "preview on vs off" attributable in the field log, so main-path
+            // timings can be compared between the two (the warnings alone only
+            // cover failing sessions).
+            let started = std::time::Instant::now();
             match factory.create(session_id, &plan, sink).await {
-                Ok(translator) => session.attach(translator),
-                Err(error) => session.fail(&error.message),
+                Ok(translator) => {
+                    log::info!(
+                        "[live-translation] preview attached session_id={} setup_ms={}",
+                        session_id,
+                        started.elapsed().as_millis()
+                    );
+                    session.attach(translator);
+                }
+                Err(error) => {
+                    log::warn!(
+                        "[live-translation] preview unavailable session_id={} after_ms={}",
+                        session_id,
+                        started.elapsed().as_millis()
+                    );
+                    session.fail(&error.message);
+                }
             }
         }));
     }
@@ -527,10 +546,12 @@ impl PendingAudioCapture for LiveTranslationPendingCapture {
         };
         let setup = Arc::clone(&self.setup);
         Box::pin(async move {
-            // Kick the translator setup off first so the WebSocket handshake
-            // overlaps the microphone open instead of serializing after it;
-            // buffered PCM covers the gap. A failed inner start aborts the
-            // session, which cancels the (possibly attached) translator.
+            // A provisional capture has already opened the microphone in
+            // `arm_capture`, so unlike `AudioRecorder::start` there is no capture
+            // bring-up left to race: the handshake can overlap the handover and
+            // the preview attaches as early as possible. Buffered PCM covers the
+            // gap. A failed inner commit aborts the session, which cancels the
+            // (possibly attached) translator.
             setup.spawn_setup(session_id, plan, Arc::clone(&session));
             let recording = match self.inner.commit(session_id, context, tee, progress).await {
                 Ok(recording) => recording,
@@ -612,12 +633,6 @@ impl AudioRecorder for LiveTranslationRecorder {
         let inner = Arc::clone(&self.inner);
         let setup = Arc::clone(&self.setup);
         Box::pin(async move {
-            // Kick the translator setup off first so the WebSocket handshake
-            // overlaps the microphone open instead of serializing after it;
-            // buffered PCM covers the gap. The recording itself is never
-            // delayed or failed by the preview: an inner start error aborts
-            // the session, which cancels the (possibly attached) translator.
-            setup.spawn_setup(session_id, plan, Arc::clone(&session));
             let recording = match inner.start(session_id, context, tee, progress).await {
                 Ok(recording) => recording,
                 Err(error) => {
@@ -625,6 +640,14 @@ impl AudioRecorder for LiveTranslationRecorder {
                     return Err(error);
                 }
             };
+            // Spawned only once the capture is up. The setup task reads two
+            // keychain entries and performs a TLS handshake; racing that against
+            // the microphone open measurably slowed capture bring-up in the
+            // field log (cpal stream_built median 43.5ms OFF vs 62.3ms ON, first
+            // PCM 86.6ms vs 109.3ms over 25/24 captures). The tee buffers PCM
+            // from the very first chunk, so no audio is lost: the preview simply
+            // attaches while the main path is already streaming.
+            setup.spawn_setup(session_id, plan, Arc::clone(&session));
             Ok(Box::new(LiveTranslationRecording {
                 inner: recording,
                 session,
@@ -1042,6 +1065,40 @@ mod tests {
         assert_eq!(translator.cancels.load(Ordering::Acquire), 0);
     }
 
+    #[tokio::test]
+    async fn tee_per_chunk_cost_stays_off_the_blocking_path() {
+        // The capture thread feeds every recorded chunk through the tee, so the
+        // per-chunk budget is part of the main-path contract: buffering and
+        // hand-off must stay memory-only work. A future change that moved
+        // keychain reads, base64 of the whole buffer, or a socket write in here
+        // would cost dropped audio frames, not just latency — this bound is
+        // loose against the ~8µs measured cost, so it only trips on something blocking.
+        const CHUNKS: usize = 100;
+        const CHUNK_LEN: usize = 3200; // 100 ms of 16 kHz mono i16
+        let inner = SpyRecorder::new(vec![vec![7u8; CHUNK_LEN]; CHUNKS]);
+        let factory = CountingFactory::ok();
+        let (_bus, sink_provider) = bus_sink_provider();
+        let recorder = decorator(Arc::clone(&inner), Arc::clone(&factory), sink_provider);
+
+        let started = std::time::Instant::now();
+        let recording = recorder
+            .start(
+                SessionId::new(),
+                context_with_plan(),
+                Arc::new(VecConsumer::default()),
+                Arc::new(NoopProgress),
+            )
+            .await
+            .expect("start succeeds");
+        let per_chunk = started.elapsed() / CHUNKS as u32;
+
+        assert!(
+            per_chunk < std::time::Duration::from_micros(500),
+            "tee cost per chunk regressed to {per_chunk:?} (budget 500µs)"
+        );
+        recording.stop().await.expect("stop succeeds");
+    }
+
     // ---- failure isolation ----
 
     #[tokio::test]
@@ -1096,10 +1153,11 @@ mod tests {
                 })
             }
         }
-        // The setup task now races the microphone open, so a failing start may
-        // have spawned the factory already; the contract is that the inner
-        // error passes through AND the translator is cancelled, never leaked.
-        let (factory, gate) = CountingFactory::gated();
+        // The preview must never race capture bring-up: the setup task (two
+        // keychain reads + a TLS handshake) is spawned only after the inner
+        // start resolves, so a failing start leaves the factory untouched and
+        // there is no translator to leak.
+        let (factory, _gate) = CountingFactory::gated();
         let (_bus, sink_provider) = bus_sink_provider();
         let factory_dyn = Arc::clone(&factory) as Arc<dyn LiveTranslatorFactory>;
         let recorder = LiveTranslationRecorder::wrap(
@@ -1121,14 +1179,14 @@ mod tests {
             Ok(_) => panic!("inner recorder failure must pass through"),
         };
         assert_eq!(error.message, "microphone unavailable");
-        // The start failed while the setup task is parked on the gate; release
-        // it and require the late attach to cancel instead of going live.
-        wait_until(|| factory.calls() == 1).await;
-        gate.notify_one();
-        let translator = factory.translator().expect("translator created");
-        wait_until(|| translator.cancels.load(Ordering::Acquire) > 0).await;
-        assert_eq!(translator.finishes.load(Ordering::Acquire), 0);
-        assert!(translator.bytes().is_empty());
+        // Give a wrongly-early setup task every chance to run before asserting
+        // it was never spawned: this is the ordering guarantee that keeps the
+        // microphone open off the translator's critical path.
+        for _ in 0..8 {
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(factory.calls(), 0, "setup must not race the microphone open");
+        assert!(factory.translator().is_none());
     }
 
     #[tokio::test]
