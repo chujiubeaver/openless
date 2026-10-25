@@ -2821,10 +2821,21 @@ mod tests {
     fn dedicated_qa_voice_hides_all_shared_capsule_presentations() {
         for state in [CapsuleState::Recording, CapsuleState::Transcribing, CapsuleState::Polishing, CapsuleState::Done, CapsuleState::Error, CapsuleState::Idle] {
             for fallback in [true, false] {
-                assert_eq!(capsule_window_action(fallback, true, state, true), CapsuleWindowAction::HideCapsule);
+                assert_eq!(
+                    capsule_window_action(fallback, false, true, state, true),
+                    CapsuleWindowAction::HideCapsule
+                );
             }
         }
-        assert_eq!(capsule_window_action(false, true, CapsuleState::Recording, false), CapsuleWindowAction::ShowCapsule);
+        assert_eq!(
+            capsule_window_action(false, false, true, CapsuleState::Recording, false),
+            CapsuleWindowAction::ShowCapsule
+        );
+        // A dedicated QA voice session outranks a lingering translation card.
+        assert_eq!(
+            capsule_window_action(false, true, true, CapsuleState::Idle, true),
+            CapsuleWindowAction::HideCapsule
+        );
     }
 
     #[test]
@@ -2846,7 +2857,7 @@ mod tests {
             CapsuleState::Done,
         ] {
             assert_eq!(
-                capsule_window_action(true, true, state, false),
+                capsule_window_action(true, false, true, state, false),
                 CapsuleWindowAction::PreserveFallbackCard
             );
         }
@@ -2855,17 +2866,41 @@ mod tests {
     #[test]
     fn capsule_window_action_follows_visibility_without_fallback_card() {
         assert_eq!(
-            capsule_window_action(false, true, CapsuleState::Recording, false),
+            capsule_window_action(false, false, true, CapsuleState::Recording, false),
             CapsuleWindowAction::ShowCapsule
         );
         assert_eq!(
-            capsule_window_action(false, true, CapsuleState::Idle, false),
+            capsule_window_action(false, false, true, CapsuleState::Idle, false),
             CapsuleWindowAction::HideCapsule
         );
         assert_eq!(
-            capsule_window_action(false, false, CapsuleState::Recording, false),
+            capsule_window_action(false, false, false, CapsuleState::Recording, false),
             CapsuleWindowAction::HideCapsule
         );
+    }
+
+    /// The post-session auto-hide collapses the capsule to Idle ~2s after Done.
+    /// A lingering translation card must survive that frame — and even the
+    /// "capsule hidden by preference" case — until the user dismisses it.
+    #[test]
+    fn lingering_translation_card_survives_the_idle_auto_hide() {
+        for show_capsule in [true, false] {
+            assert_eq!(
+                capsule_window_action(false, true, show_capsule, CapsuleState::Idle, false),
+                CapsuleWindowAction::ShowCapsule
+            );
+        }
+        for state in [
+            CapsuleState::Done,
+            CapsuleState::Cancelled,
+            CapsuleState::Error,
+            CapsuleState::Recording,
+        ] {
+            assert_eq!(
+                capsule_window_action(false, true, true, state, false),
+                CapsuleWindowAction::ShowCapsule
+            );
+        }
     }
 
     #[test]

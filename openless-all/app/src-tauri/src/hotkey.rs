@@ -790,18 +790,32 @@ mod platform {
             KEY_DOWN => {
                 let keycode = unsafe { CGEventGetIntegerValueField(event, KEYBOARD_EVENT_KEYCODE) };
                 if keycode == ESC_KEYCODE && super::capsule_menu_open() { return event; }
-                // Lingering translation card: Fn+Esc / Ctrl+Esc dismiss it and are
-                // consumed here (no app sees the Esc); a bare Esc is left alone so it
-                // keeps its normal meaning for the focused application.
-                if keycode == ESC_KEYCODE && translation_lingering_hotkey() {
+                // Fn+Esc / Ctrl+Esc are permanent global shortcuts: they are reserved
+                // whether or not the capsule or a translation card is on screen, and
+                // are always consumed here so no application ever receives the bare
+                // Esc that follows the modifier. The press still routes through
+                // handle_key_down, which voids the Fn short-press candidate (so
+                // dismissing a card never starts a dictation) and reaches the cancel
+                // bridge — that bridge dismisses a lingering translation card first
+                // and otherwise cancels a live session.
+                //
+                // A bare Esc keeps its normal meaning: while a lingering card is on
+                // screen and no session is live it passes through to the focused app
+                // without dismissing the card; during a session it falls through to
+                // the cancel/exclusive handling below.
+                if keycode == ESC_KEYCODE {
                     let flags = unsafe { CGEventGetFlags(event) };
                     let combo = (flags & FLAG_MASK_CONTROL) != 0
                         || (flags & FLAG_MASK_SECONDARY_FN) != 0;
                     if combo {
-                        send_cancel_or_log(&ctx.cancel_tx);
+                        handle_key_down(ctx, event);
                         return std::ptr::null_mut();
                     }
-                    return event;
+                    if translation_lingering_hotkey()
+                        && !ctx.shared.recording_active.load(Ordering::SeqCst)
+                    {
+                        return event;
+                    }
                 }
                 if !ctx.shared.recording_active.load(Ordering::SeqCst)
                     && crate::side_aware_combo::platform::dispatch_keycode(keycode, false, 0, true) {

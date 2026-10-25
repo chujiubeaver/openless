@@ -820,12 +820,16 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
   );
   const showTranslationPreview =
     state !== 'idle' && !showLiveTranscript && liveTranslationPreview.length > 0;
-  // While lingering, keep the card on screen through the terminal states too so
-  // it does not flicker away at "done" before the idle card-only view takes over.
+  // While lingering, the card is the only thing on screen and must survive every
+  // post-session state — including the idle frame the native auto-hide timer
+  // emits ~2s after "done" (gating it on done/cancelled/error made the card
+  // vanish on its own). Only an in-progress session takes the slot back, and the
+  // recording edge clears `lingering` before that can happen.
   const lingeringText = liveTranslationLingering ? liveTranslationText.trim() : '';
+  const sessionBodyActive = ['recording', 'transcribing', 'polishing'].includes(state);
   const cardText = showTranslationPreview
     ? liveTranslationPreview
-    : lingeringText && ['done', 'cancelled', 'error'].includes(state) && !showLiveTranscript
+    : lingeringText && !sessionBodyActive && !showLiveTranscript
       ? lingeringText
       : '';
   const showCard = cardText.length > 0 && !insertFallback && suggestions.length === 0;
@@ -937,7 +941,7 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
   // recording/done animation) over the lingering card, which reads as a flash.
   // It IS gated off the active recording states so the floating card can never
   // cover the voice-input animation of a new session (user report 2026-10).
-  if (lingeringCardActive && !['recording', 'transcribing', 'polishing'].includes(state)) {
+  if (lingeringCardActive && !sessionBodyActive) {
     return (
       <div
         style={{
