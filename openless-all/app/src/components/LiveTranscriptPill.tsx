@@ -272,7 +272,7 @@ export function LiveTranslationCard({
       >
         {interactive && (
           <div
-            className="ol-live-translation-grip"
+            className="ol-live-translation-dragzone"
             onPointerDown={(event) => {
               dragOrigin.current = { x: event.screenX, y: event.screenY };
               (event.target as HTMLElement).setPointerCapture?.(event.pointerId);
@@ -289,14 +289,18 @@ export function LiveTranslationCard({
               dragOrigin.current = null;
               onDragEnd?.();
             }}
-          >
-            {tag && <span className="ol-live-transcript-tag">{tag}</span>}
-            <button type="button" className="ol-live-translation-close" onClick={onClose}>
-              <Icon name="close" size={11} strokeWidth={2.2} />
-            </button>
-          </div>
+          />
         )}
-        {!interactive && tag && <span className="ol-live-transcript-tag">{tag}</span>}
+        {interactive && (
+          <button
+            type="button"
+            className="ol-live-translation-close"
+            aria-label="close translation"
+            onClick={onClose}
+          >
+            <Icon name="close" size={11} strokeWidth={2.2} />
+          </button>
+        )}
         <div
           className="ol-live-translation-frame"
           ref={frameRef}
@@ -304,6 +308,7 @@ export function LiveTranslationCard({
           style={{ maxHeight }}
         >
           <div className="ol-live-translation-text">
+            {tag && <span className="ol-live-transcript-tag">{tag}</span>}
             {units.map((unit) => (
               <TranslationWordGlyph
                 key={unit.key}

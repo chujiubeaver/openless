@@ -454,7 +454,7 @@
   align-items: flex-start;
   gap: 8px;
   box-sizing: border-box;
-  padding: 8px 14px;
+  padding: 8px 30px 8px 14px;
   border-radius: 14px;
   background: var(--ol-capsule-pill-bg);
   border: 1px solid var(--ol-live-translate-pill-border, rgb(37 99 235 / 38%));
@@ -464,10 +464,14 @@
 }
 
 /* Lingering (interactive) mode: the card accepts the mouse so it can be
-   dragged, closed and its text selected; layout stacks grip above the text. */
+   dragged, closed and its text selected. The tag sits inline with the first
+   text line and the close button overlays the corner, so no extra row is
+   spent (space-saving per user request). */
+.ol-live-translation-card {
+  position: relative;
+}
+
 .ol-live-translation-card[data-interactive='true'] {
-  flex-direction: column;
-  align-items: stretch;
   pointer-events: auto;
   cursor: default;
 }
@@ -478,25 +482,24 @@
   cursor: text;
 }
 
-.ol-live-translation-grip {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  width: 100%;
-  padding-bottom: 4px;
+.ol-live-translation-dragzone {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 26px;
+  height: 14px;
   cursor: grab;
-  user-select: none;
-  -webkit-user-select: none;
 }
 
-.ol-live-translation-grip:active {
+.ol-live-translation-dragzone:active {
   cursor: grabbing;
 }
 
 .ol-live-translation-close {
+  position: absolute;
+  top: 6px;
+  right: 6px;
   display: inline-flex;
-  flex: 0 0 auto;
   align-items: center;
   justify-content: center;
   width: 18px;
@@ -518,8 +521,9 @@
 }
 
 .ol-live-translation-card .ol-live-transcript-tag {
-  margin-right: 0;
-  margin-top: 1px;
+  display: inline-block;
+  margin-right: 6px;
+  vertical-align: 2px;
 }
 
 .ol-live-translation-frame {

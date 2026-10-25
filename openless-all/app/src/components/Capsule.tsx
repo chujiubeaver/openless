@@ -25,7 +25,6 @@ import {
   getCapsulePillMetrics,
   getClassicCapsuleGeometry,
   getCapsuleTranscriptRailHeight,
-  CAPSULE_TRANSLATION_GRIP_HEIGHT,
   getCapsuleLingeringBottomOffset,
   getCapsuleTranslationCardHeight,
   getCapsuleTranslationRailHeight,
@@ -873,8 +872,7 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
   useEffect(() => {
     if (!isTauri) return;
     if (liveTranslationLingering) {
-      const cardHeight =
-        getCapsuleTranslationCardHeight(transcriptFontSize) + CAPSULE_TRANSLATION_GRIP_HEIGHT + 6;
+      const cardHeight = getCapsuleTranslationCardHeight(transcriptFontSize) + 6;
       void setCapsuleTranslationLingering(
         true,
         getCapsuleTranslationWindowWidth(capsuleStyle),
@@ -937,7 +935,9 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
   // Note: deliberately NOT gated on `!leaving` — during the capsule exit
   // animation the main tree would paint one frame of the session body (the
   // recording/done animation) over the lingering card, which reads as a flash.
-  if (lingeringCardActive) {
+  // It IS gated off the active recording states so the floating card can never
+  // cover the voice-input animation of a new session (user report 2026-10).
+  if (lingeringCardActive && !['recording', 'transcribing', 'polishing'].includes(state)) {
     return (
       <div
         style={{
