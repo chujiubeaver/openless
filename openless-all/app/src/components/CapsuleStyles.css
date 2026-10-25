@@ -542,6 +542,32 @@
   mask-image: linear-gradient(to bottom, rgba(0, 0, 0, 0.55), #000 8px);
 }
 
+/* A lingering card is scrollable: text longer than the 4-line budget can be
+   read by scrolling up. `justify-content: flex-start` is required — with
+   flex-end packing the overflow sits above the scroll origin and is
+   unreachable. The live (non-interactive) preview keeps flex-end so the newest
+   line is always the one showing. */
+.ol-live-translation-frame[data-scrollable='true'] {
+  overflow-y: auto;
+  overflow-x: hidden;
+  justify-content: flex-start;
+  scrollbar-width: thin;
+  scrollbar-color: rgb(255 255 255 / 30%) transparent;
+}
+
+.ol-live-translation-frame[data-scrollable='true']::-webkit-scrollbar {
+  width: 4px;
+}
+
+.ol-live-translation-frame[data-scrollable='true']::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.ol-live-translation-frame[data-scrollable='true']::-webkit-scrollbar-thumb {
+  background: rgb(255 255 255 / 30%);
+  border-radius: 999px;
+}
+
 .ol-live-translation-text {
   font-family: var(--ol-font-sans);
   font-weight: var(--ol-font-weight-medium);

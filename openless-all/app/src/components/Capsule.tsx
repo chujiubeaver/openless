@@ -437,6 +437,12 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
   const liveTranslationRef = useRef<LiveTranslationViewState>(createLiveTranslationState());
   const [liveTranslationText, setLiveTranslationText] = useState('');
   const [liveTranslationLingering, setLiveTranslationLingering] = useState(false);
+  // The backend announced a preview for this session before any text arrived:
+  // the window is pre-sized for the card so its first paint does not resize the
+  // window underneath an already-painted frame (that resize stretches the old
+  // frame across the new bounds, which reads as the voice animation flashing
+  // through the card's slot).
+  const [liveTranslationArmed, setLiveTranslationArmed] = useState(false);
   // The lingering card must not move when the session body disappears, so its
   // real on-screen rect is measured while the session is still rendered and the
   // compact native window is then pinned to exactly that box.
@@ -602,6 +608,9 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
         if (nextTranslation.lingering !== previousTranslation.lingering) {
           setLiveTranslationLingering(nextTranslation.lingering);
         }
+        if (nextTranslation.armed !== previousTranslation.armed) {
+          setLiveTranslationArmed(nextTranslation.armed);
+        }
         setTranslation(p.translation === true);
         setWarming(p.warming === true);
         setSelectionPolish(p.selectionPolish === true);
@@ -622,10 +631,17 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
           const next = applyTranscriptEvent(transcriptViewRef.current, payload);
           transcriptViewRef.current = next;
           setLocalAsrText(next.text);
-          const nextTranslation = applyLiveTranslationEvent(liveTranslationRef.current, payload);
-          if (nextTranslation !== liveTranslationRef.current) {
+          const previousTranslation = liveTranslationRef.current;
+          const nextTranslation = applyLiveTranslationEvent(previousTranslation, payload);
+          if (nextTranslation !== previousTranslation) {
             liveTranslationRef.current = nextTranslation;
             setLiveTranslationText(nextTranslation.text);
+            if (nextTranslation.armed !== previousTranslation.armed) {
+              setLiveTranslationArmed(nextTranslation.armed);
+            }
+            if (nextTranslation.lingering !== previousTranslation.lingering) {
+              setLiveTranslationLingering(nextTranslation.lingering);
+            }
           }
         }))
       )
@@ -865,18 +881,25 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
   // the next session; the native window must stay sized for it.
   const lingeringCardActive = liveTranslationLingering && liveTranslationText.trim().length > 0;
   const translationCardActive = translationPreviewVisible || lingeringCardActive;
+  // Reserve the card's rail slot as soon as the backend announces a preview for
+  // this session, so the window is already card-sized when the first text paints.
+  // Growing it at that moment instead makes WebKit stretch the previous frame
+  // across the new bounds: the voice animation flashes through the card's slot.
+  // The transcript pill keeps its own (smaller) rail budget when it is in use.
+  const translationRailReserved =
+    translationCardActive || (liveTranslationArmed && sessionBodyActive && !transcriptVisible);
   // The native window geometry follows whichever text occupies the rail slot.
-  const capsuleRailVisible = transcriptVisible || translationCardActive;
+  const capsuleRailVisible = transcriptVisible || translationRailReserved;
   // The wrapped translation card needs a taller rail than the one-line
   // transcript pill; the native window grows by exactly this budget
   // (getCapsuleTranslationRailHeight mirrors the Rust override math).
   const translationTextHeight = getCapsuleTranslationTextHeight(transcriptFontSize);
   const translationCard = { maxHeight: translationTextHeight };
   const translationRailHeight = getCapsuleTranslationRailHeight(capsuleStyle, transcriptFontSize);
-  const capsuleRailHeight = translationCardActive ? translationRailHeight : undefined;
+  const capsuleRailHeight = translationRailReserved ? translationRailHeight : undefined;
   // The card is wider than the 460px capsule body: the native window must
   // grow horizontally too, or the webview clips the card at the window edge.
-  const capsuleRailWidth = translationCardActive
+  const capsuleRailWidth = translationRailReserved
     ? getCapsuleTranslationWindowWidth(capsuleStyle)
     : undefined;
 

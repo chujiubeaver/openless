@@ -296,6 +296,16 @@ impl LiveTranslationSessionState {
         Arc::clone(&self.sink)
     }
 
+    /// Announce "this session has a preview planned" before any text exists, as
+    /// an empty streaming snapshot. The capsule uses it to pre-size its window
+    /// for the card: growing the window at the moment the first text paints makes
+    /// WebKit stretch the previous frame across the new bounds, which reads as
+    /// the voice animation flashing through the card's slot.
+    pub fn announce_planned(&self) {
+        self.sink
+            .publish(self.session_id, LiveTranslationUpdate::streaming(""));
+    }
+
     /// Called from the audio callback thread: never awaits, never allocates
     /// beyond the capped buffer, never touches the primary consumer.
     fn consume(&self, pcm: &[u8]) {
@@ -544,6 +554,9 @@ impl PendingAudioCapture for LiveTranslationPendingCapture {
             log::warn!("[live-translation] event sink unavailable; preview disabled for this session");
             return self.inner.commit(session_id, context, consumer, progress);
         };
+        // Pre-size the capsule window for the card before any text exists (see
+        // announce_planned); the first painted text must not resize it.
+        session.announce_planned();
         let setup = Arc::clone(&self.setup);
         Box::pin(async move {
             // A provisional capture has already opened the microphone in
@@ -630,6 +643,9 @@ impl AudioRecorder for LiveTranslationRecorder {
             log::warn!("[live-translation] event sink unavailable; preview disabled for this session");
             return self.inner.start(session_id, context, consumer, progress);
         };
+        // Pre-size the capsule window for the card before any text exists (see
+        // announce_planned); the first painted text must not resize it.
+        session.announce_planned();
         let inner = Arc::clone(&self.inner);
         let setup = Arc::clone(&self.setup);
         Box::pin(async move {
@@ -1099,6 +1115,51 @@ mod tests {
         recording.stop().await.expect("stop succeeds");
     }
 
+    #[tokio::test]
+    async fn session_start_announces_the_planned_preview_before_any_text() {
+        // The capsule pre-sizes its window from this empty streaming snapshot, so
+        // it must be on the bus as soon as the plan exists — before the
+        // translator attaches and long before the first translated word. Growing
+        // the window only when text arrives stretches the previous frame across
+        // the new bounds (the voice animation flashes through the card's slot).
+        let inner = SpyRecorder::new(vec![vec![1, 2]]);
+        let (factory, gate) = CountingFactory::gated();
+        let (bus, sink_provider) = bus_sink_provider();
+        let recorder = decorator(Arc::clone(&inner), Arc::clone(&factory), sink_provider);
+
+        let recording = recorder
+            .start(
+                SessionId::new(),
+                context_with_plan(),
+                Arc::new(VecConsumer::default()),
+                Arc::new(NoopProgress),
+            )
+            .await
+            .expect("start succeeds");
+
+        // The attach is parked on the gate, so the announcement is the only
+        // thing that can have been published so far.
+        let replay = bus.replay_after(0);
+        let updates: Vec<LiveTranslationUpdate> = replay
+            .events
+            .iter()
+            .filter_map(|event| match &event.kind {
+                BackendEventKind::LiveTranslationUpdate(update) => Some(update.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            updates,
+            vec![LiveTranslationUpdate {
+                text: String::new(),
+                status: LiveTranslationStatus::Streaming
+            }]
+        );
+
+        gate.notify_one();
+        recording.stop().await.expect("stop succeeds");
+    }
+
     // ---- failure isolation ----
 
     #[tokio::test]
@@ -1118,10 +1179,28 @@ mod tests {
             .await
             .expect("translator failure must never fail the recorder start");
 
-        wait_until(|| count_live_translation_events(&bus) > 0).await;
+        // The empty "preview planned" announcement is published synchronously at
+        // start, so waiting for "any event" would race the failure snapshot.
+        wait_until(|| {
+            bus.replay_after(0).events.iter().any(|event| {
+                matches!(
+                    &event.kind,
+                    BackendEventKind::LiveTranslationUpdate(update)
+                        if update.status == LiveTranslationStatus::Unavailable
+                )
+            })
+        })
+        .await;
         let replay = bus.replay_after(0);
+        // The first event on the bus is the empty "preview planned" announcement
+        // published at start; the failure itself surfaces as the Unavailable
+        // snapshot that follows it.
         let update = replay.events.iter().find_map(|event| match &event.kind {
-            BackendEventKind::LiveTranslationUpdate(update) => Some(update.clone()),
+            BackendEventKind::LiveTranslationUpdate(update)
+                if update.status == LiveTranslationStatus::Unavailable =>
+            {
+                Some(update.clone())
+            }
             _ => None,
         });
         assert_eq!(

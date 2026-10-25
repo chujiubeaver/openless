@@ -30,6 +30,14 @@ export interface LiveTranslationViewState {
   unavailable: boolean;
   /** Session ended but the card stays on screen until Esc or the next session. */
   lingering: boolean;
+  /**
+   * The backend announced a preview for this session before any text exists.
+   * The capsule pre-sizes its window for the card, so the first painted text
+   * does not resize the window underneath an already-painted frame — WebKit
+   * stretches the previous frame across the new bounds, which reads as the voice
+   * animation flashing through the card's slot.
+   */
+  armed: boolean;
 }
 
 export function createLiveTranslationState(): LiveTranslationViewState {
@@ -41,6 +49,7 @@ export function createLiveTranslationState(): LiveTranslationViewState {
     sessionStartObserved: false,
     unavailable: false,
     lingering: false,
+    armed: false,
   };
 }
 
@@ -60,6 +69,7 @@ export function beginLiveTranslationGeneration(
     text: reuseStartedSession ? state.text : '',
     unavailable: reuseStartedSession ? state.unavailable : false,
     lingering: false,
+    armed: reuseStartedSession ? state.armed : false,
     awaitingSessionStart: !reuseStartedSession,
     sessionStartObserved: false,
   };
@@ -67,7 +77,14 @@ export function beginLiveTranslationGeneration(
 
 /** Esc / explicit dismissal: drop the card entirely. */
 export function clearLiveTranslation(state: LiveTranslationViewState): LiveTranslationViewState {
-  return { ...state, text: '', unavailable: false, lingering: false, sessionStartObserved: false };
+  return {
+    ...state,
+    text: '',
+    unavailable: false,
+    lingering: false,
+    armed: false,
+    sessionStartObserved: false,
+  };
 }
 
 /**
@@ -75,8 +92,8 @@ export function clearLiveTranslation(state: LiveTranslationViewState): LiveTrans
  * mark it lingering so the capsule window stays open showing the card alone.
  */
 export function lingerLiveTranslation(state: LiveTranslationViewState): LiveTranslationViewState {
-  if (!state.text.trim()) return { ...state, lingering: false };
-  return { ...state, lingering: true };
+  if (!state.text.trim()) return { ...state, lingering: false, armed: false };
+  return { ...state, lingering: true, armed: false };
 }
 
 /** Apply the session id carried by capsule:state before backend:event. */
@@ -91,6 +108,7 @@ export function applyLiveTranslationSessionId(
     text: '',
     unavailable: false,
     lingering: false,
+    armed: false,
     awaitingSessionStart: false,
     sessionStartObserved: true,
   };
@@ -113,6 +131,7 @@ export function applyLiveTranslationEvent(
         text: '',
         unavailable: false,
         lingering: false,
+        armed: false,
         awaitingSessionStart: false,
         sessionStartObserved: true,
       };
@@ -133,14 +152,22 @@ export function applyLiveTranslationEvent(
   // grace) must not wipe the snapshot — wiping it makes the capsule body flash
   // for one exit-animation frame. A new session resets `lingering` first.
   if (state.lingering) return { ...state, sequence };
+  const payload = event.kind.payload as LiveTranslationUpdate | undefined;
+  if (!payload || typeof payload.text !== 'string') return { ...state, sequence };
+  // Pre-arm signal: an empty streaming snapshot published as soon as the session
+  // has a preview plan, so the capsule can size its window for the card before
+  // any text exists. It carries no text and is cleared at every generation edge,
+  // so it is deliberately exempt from the session-start gate below (the plan is
+  // announced from the recorder start, which can precede `starting`).
+  if (payload.status === 'streaming' && payload.text === '') {
+    return state.armed ? { ...state, sequence } : { ...state, sequence, armed: true };
+  }
   // Gate exactly like the transcript rail: drop late events from a session
   // that is not the observed one, and hold updates until the session starts.
   if (state.awaitingSessionStart) return { ...state, sequence };
   if (state.sessionId !== null && event.sessionId !== state.sessionId) {
     return { ...state, sequence };
   }
-  const payload = event.kind.payload as LiveTranslationUpdate | undefined;
-  if (!payload || typeof payload.text !== 'string') return { ...state, sequence };
   if (payload.status === 'unavailable') {
     return {
       ...state,
@@ -148,6 +175,7 @@ export function applyLiveTranslationEvent(
       sequence,
       text: '',
       unavailable: true,
+      armed: false,
     };
   }
   // Sticky hidden: a session that reported Unavailable never repaints.
@@ -157,6 +185,7 @@ export function applyLiveTranslationEvent(
     sessionId: event.sessionId ?? state.sessionId,
     sequence,
     text: payload.text,
+    armed: true,
   };
 }
 

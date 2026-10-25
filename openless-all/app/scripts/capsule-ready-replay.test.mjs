@@ -129,6 +129,7 @@ function mount({
     'setLocalAsrText',
     'setLiveTranslationText',
     'setLiveTranslationLingering',
+    'setLiveTranslationArmed',
     'setTranslation',
     'setWarming',
     'setSelectionPolish',

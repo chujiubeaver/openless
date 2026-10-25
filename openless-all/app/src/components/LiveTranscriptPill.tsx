@@ -256,18 +256,35 @@ export function LiveTranslationCard({
   const [units, setUnits] = useState<TranslationWordUnit[]>(() => diffTranslationWords([], ''));
   const [seenText, setSeenText] = useState('');
   const [overflowed, setOverflowed] = useState(false);
+  const [scrolledFromTop, setScrolledFromTop] = useState(false);
   const frameRef = useRef<HTMLDivElement>(null);
+  // Interactive (lingering) cards scroll: stay pinned to the newest line until
+  // the user scrolls up to read earlier ones.
+  const pinnedToTailRef = useRef(true);
   if (liveText !== seenText) {
     setSeenText(liveText);
     setUnits((prev) => diffTranslationWords(prev, liveText));
   }
   // The top fade must only exist when lines are actually hidden; otherwise it
-  // eats the first visible line (user report 2026-10).
+  // eats the first visible line (user report 2026-10). While scrolling, "hidden
+  // above" means "not scrolled to the top" rather than "does not fit".
   useLayoutEffect(() => {
     const frame = frameRef.current;
     if (!frame) return;
+    if (interactive && pinnedToTailRef.current) {
+      frame.scrollTop = frame.scrollHeight;
+    }
     setOverflowed(frame.scrollHeight > frame.clientHeight + 1);
-  }, [units, maxHeight, fontSize]);
+    setScrolledFromTop(frame.scrollTop > 1);
+  }, [units, maxHeight, fontSize, interactive]);
+
+  const handleFrameScroll = () => {
+    const frame = frameRef.current;
+    if (!frame) return;
+    pinnedToTailRef.current =
+      frame.scrollHeight - frame.scrollTop - frame.clientHeight < 4;
+    setScrolledFromTop(frame.scrollTop > 1);
+  };
 
   // The whole card chrome drags the window — every edge, not just a top strip.
   // The wrapped text and the close button are excluded so selecting text and
@@ -324,8 +341,10 @@ export function LiveTranslationCard({
         <div
           className="ol-live-translation-frame"
           ref={frameRef}
-          data-overflowed={overflowed ? 'true' : 'false'}
+          data-overflowed={(interactive ? scrolledFromTop : overflowed) ? 'true' : 'false'}
+          data-scrollable={interactive ? 'true' : 'false'}
           style={{ maxHeight }}
+          onScroll={interactive ? handleFrameScroll : undefined}
         >
           <div className="ol-live-translation-text">
             {tag && <span className="ol-live-transcript-tag">{tag}</span>}

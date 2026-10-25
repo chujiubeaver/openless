@@ -1793,6 +1793,34 @@ impl TauriCapsuleWindow {
         ));
     }
 
+    /// Release the shared capsule window after a card that borrowed it (vocab
+    /// suggestion / insert fallback) is dismissed. Returns true when the window
+    /// was really hidden.
+    ///
+    /// A lingering translation card survives those borrowers: it may only be
+    /// closed by Fn/Ctrl+Esc, its own × button, or a new session, so hiding the
+    /// shared window here would silently dismiss a translation the user is still
+    /// reading (observed in the field: an insert-fallback card appeared after
+    /// the session, and its dismissal took the translation card with it).
+    /// Restore the compact card geometry and its interactivity instead.
+    pub(crate) fn hide_after_borrowing_card(&self) -> bool {
+        if self.state.translation_lingering.load(Ordering::SeqCst) {
+            self.state.capsule_visible.store(true, Ordering::SeqCst);
+            self.position_lingering_card();
+            // The borrower's hit-test restore would make the card click-through
+            // again; it must stay draggable/selectable/closable.
+            if self.state.cursor_passthrough.load(Ordering::SeqCst) {
+                if let Err(error) = self.set_cursor_passthrough(false) {
+                    log::warn!("[capsule] restoring translation card interactivity failed: {error}");
+                }
+            }
+            self.start_layout_watch();
+            return false;
+        }
+        let _ = self.hide();
+        true
+    }
+
     /// Global Esc: dismiss a lingering translation card instead of cancelling
     /// a (nonexistent) recording. Returns whether a card was dismissed.
     pub(crate) fn dismiss_translation_lingering(&self) -> bool {

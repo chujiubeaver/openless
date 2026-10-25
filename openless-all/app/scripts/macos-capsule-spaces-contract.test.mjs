@@ -277,12 +277,12 @@ for (const name of ['hide_vocab_suggestion_card', 'hide_insert_fallback_card']) 
   );
   assertMatch(
     body,
-    /capsule\.hide\(\)[\s\S]*?capsule\.restore_capsule_hit_test_mode\(\)/,
-    `${name} must hide the window before the host restores its geometry`,
+    /let hidden = capsule\.hide_after_borrowing_card\(\);[\s\S]*?if hidden \{[\s\S]*?capsule\.restore_capsule_hit_test_mode\(\)/,
+    `${name} must release the window through the host capability (which keeps it for a lingering translation card) and only restore passthrough when it really hid`,
   );
   // Ordering invariant: geometry restoration must happen after hiding, or the restore can
   // composite a frame of "card stretched wide, still flying across half the screen".
-  const hideAt = body.indexOf('capsule.hide()');
+  const hideAt = body.indexOf('capsule.hide_after_borrowing_card()');
   const restoreAt = body.indexOf('restore_capsule_hit_test_mode()');
   if (hideAt === -1 || hideAt > restoreAt) {
     throw new Error(`${name} must hide the window before restoring its geometry`);

@@ -170,19 +170,24 @@ fn hide_vocab_suggestion_card(inner: &Arc<Inner>) {
     let _ = capsule.run_on_main_thread(move |capsule| {
         // Hide before changing geometry: restoring size and position while the
         // window is visible can composite a frame with the card stretched wide
-        // and flying across half the screen.
-        let _ = capsule.hide();
+        // and flying across half the screen. A lingering translation card keeps
+        // the window instead — this card only borrowed it.
+        let hidden = capsule.hide_after_borrowing_card();
         // Passthrough must be restored, or the capsule keeps blocking that
         // area at the bottom of the screen.
         #[cfg(not(mobile))]
-        if let Err(e) = capsule.restore_capsule_hit_test_mode() {
-            log::warn!("[vocab-card] restoring capsule hit testing failed: {e}");
+        if hidden {
+            if let Err(e) = capsule.restore_capsule_hit_test_mode() {
+                log::warn!("[vocab-card] restoring capsule hit testing failed: {e}");
+            }
         }
         // On mobile there is no native hit-test mode to restore, but the capsule
         // still needs the cached style/rail geometry after the card resized it.
         #[cfg(mobile)]
-        if let Err(e) = capsule.restore_capsule_geometry() {
-            log::warn!("[vocab-card] restoring capsule geometry failed: {e}");
+        if hidden {
+            if let Err(e) = capsule.restore_capsule_geometry() {
+                log::warn!("[vocab-card] restoring capsule geometry failed: {e}");
+            }
         }
     });
 }
@@ -340,19 +345,24 @@ fn hide_insert_fallback_card(inner: &Arc<Inner>) {
         host.clear_insert_fallback();
         // Hide before changing geometry: restoring size and position while the
         // window is visible can composite a frame with the card stretched wide
-        // and flying across half the screen.
-        let _ = capsule.hide();
+        // and flying across half the screen. A lingering translation card keeps
+        // the window instead — this card only borrowed it.
+        let hidden = capsule.hide_after_borrowing_card();
         // Passthrough must be restored, or the capsule keeps blocking that
         // screen area.
         #[cfg(not(mobile))]
-        if let Err(e) = capsule.restore_capsule_hit_test_mode() {
-            log::warn!("[fallback-card] restoring capsule hit testing failed: {e}");
+        if hidden {
+            if let Err(e) = capsule.restore_capsule_hit_test_mode() {
+                log::warn!("[fallback-card] restoring capsule hit testing failed: {e}");
+            }
         }
         // On mobile there is no native hit-test mode to restore, but the capsule
         // still needs the cached style/rail geometry after the card resized it.
         #[cfg(mobile)]
-        if let Err(e) = capsule.restore_capsule_geometry() {
-            log::warn!("[fallback-card] restoring capsule geometry failed: {e}");
+        if hidden {
+            if let Err(e) = capsule.restore_capsule_geometry() {
+                log::warn!("[fallback-card] restoring capsule geometry failed: {e}");
+            }
         }
         if let Some(payload) = deferred_capsule {
             // During the card, QA / Selection Polish still advance capsule
