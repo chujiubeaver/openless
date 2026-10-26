@@ -344,6 +344,9 @@ const EXIT_ANIM_MS_CLASSIC = DEFAULT_CAPSULE_EXIT_MS;
 // ready and persisted to localStorage across sessions. Default 150ms, clamped [60,600].
 const WARMUP_MS_KEY = 'ol-capsule-warmup-ms';
 const WARMUP_MS_DEFAULT = 150;
+/** Transparent margin the compact lingering window keeps around the card so its
+ *  drop shadow and rounded border are never clipped by the window edge. */
+const CARD_SHADOW_SLACK = 6;
 function readWarmupMs(): number {
   if (typeof localStorage === 'undefined') return WARMUP_MS_DEFAULT;
   const raw = Number(localStorage.getItem(WARMUP_MS_KEY));
@@ -942,11 +945,17 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
       return;
     }
     const pinned = translationPreviewRectRef.current;
+    // Size comes from the card as rendered NOW — the lingering card carries
+    // extra padding for its drag ring, so a size measured before the swap is
+    // ~8px short and clips the bottom border (user report 2026-10). The slack
+    // leaves room for the card's drop shadow; the card is centered in it, so
+    // the insets shift by the same slack to keep the card's screen position.
+    const slack = CARD_SHADOW_SLACK;
     const next = {
-      width: Math.ceil(pinned?.width ?? rect.width),
-      height: Math.ceil(pinned?.height ?? rect.height) + 2,
-      top: Math.max(0, Math.round(pinned?.top ?? 0)),
-      left: Math.max(0, Math.round(pinned?.left ?? 0)),
+      width: Math.ceil(rect.width) + slack * 2,
+      height: Math.ceil(rect.height) + slack * 2,
+      top: Math.max(0, Math.round(pinned?.top ?? rect.top) - slack),
+      left: Math.max(0, Math.round(pinned?.left ?? rect.left) - slack),
     };
     setLingeringCardRect((prev) =>
       prev &&
@@ -1040,10 +1049,9 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
           display: 'flex',
           flexDirection: 'column',
           alignItems: 'center',
-          // The card sits flush with the window's top edge; the native host
-          // shifts the compact window down by the measured inset instead, so
-          // the card stays exactly where it was while the session was live.
-          justifyContent: 'flex-start',
+          // The card is centered in a window that carries CARD_SHADOW_SLACK on
+          // every side, so its drop shadow is never clipped by the window edge.
+          justifyContent: 'center',
           boxSizing: 'border-box',
           background: 'transparent',
         }}

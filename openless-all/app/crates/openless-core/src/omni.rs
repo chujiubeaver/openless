@@ -21,7 +21,8 @@ use serde_json::{json, Value};
 use crate::polish::{
     append_utf8_sse_chunk, apply_openai_compatible_thinking_control, chat_completions_url,
     extract_assistant_content, finish_utf8_sse_chunks, http_client_builder,
-    openai_model_omits_custom_temperature, safe_str_slice, send_with_transient_retry, LLMError,
+    http_client_builder_direct, openai_model_omits_custom_temperature, safe_str_slice,
+    send_with_transient_retry_or_direct, LLMError,
 };
 
 pub const OMNI_GEMINI_PROVIDER_ID: &str = "gemini";
@@ -68,6 +69,10 @@ pub struct OmniCallLabel {
 pub struct OpenAICompatibleOmni {
     config: OmniConfig,
     client: reqwest::Client,
+    /// No-proxy client for the connect-phase failover: a dead or misconfigured
+    /// system proxy must not cost the user a finished recording while a direct
+    /// route still works.
+    direct_client: reqwest::Client,
 }
 
 impl OpenAICompatibleOmni {
@@ -84,7 +89,40 @@ impl OpenAICompatibleOmni {
                 .build()
                 .unwrap_or_else(|_| reqwest::Client::new())
         });
-        Self { config, client }
+        // Keyed by (timeout, true) so it is the very same pooled client the
+        // primary slot already uses whenever the primary is direct.
+        let direct_client = crate::net::cached_client((timeout, true), || {
+            http_client_builder_direct(timeout)
+                .build()
+                .unwrap_or_else(|_| reqwest::Client::new())
+        });
+        Self {
+            config,
+            client,
+            direct_client,
+        }
+    }
+
+    /// One request builder shape shared by both send sites and by the failover
+    /// rebuild, so the direct attempt is byte-identical apart from the route.
+    fn post_request(
+        &self,
+        client: &reqwest::Client,
+        url: &str,
+        body: &Value,
+        stream: bool,
+    ) -> reqwest::RequestBuilder {
+        let mut request = client.post(url).header("Content-Type", "application/json");
+        if stream {
+            request = request.header("Accept", "text/event-stream");
+        }
+        if !self.config.api_key.trim().is_empty() {
+            request = request.header("Authorization", format!("Bearer {}", self.config.api_key.trim()));
+        }
+        for (key, value) in &self.config.extra_headers {
+            request = request.header(key.as_str(), value.as_str());
+        }
+        request.json(body)
     }
 
     fn omni_body(&self, stream: bool, messages: Vec<Value>) -> Value {
@@ -148,18 +186,12 @@ impl OpenAICompatibleOmni {
     }
 
     async fn send_unary(&self, url: &str, body: &Value) -> Result<String, LLMError> {
-        let mut request = self
-            .client
-            .post(url)
-            .header("Content-Type", "application/json");
-        if !self.config.api_key.trim().is_empty() {
-            request = request.header("Authorization", format!("Bearer {}", self.config.api_key));
-        }
-        for (key, value) in &self.config.extra_headers {
-            request = request.header(key.as_str(), value.as_str());
-        }
-        let request = request.json(body);
-        let response = send_with_transient_retry(request).await?;
+        let response = send_with_transient_retry_or_direct(
+            self.post_request(&self.client, url, body, false),
+            &self.direct_client,
+            |client| self.post_request(client, url, body, false),
+        )
+        .await?;
         let status = response.status();
         let body_text = response
             .text()
@@ -188,19 +220,12 @@ impl OpenAICompatibleOmni {
         F: Fn(&str) + Send + Sync,
         C: Fn() -> bool + Send + Sync,
     {
-        let mut request = self
-            .client
-            .post(url)
-            .header("Content-Type", "application/json")
-            .header("Accept", "text/event-stream");
-        if !self.config.api_key.trim().is_empty() {
-            request = request.header("Authorization", format!("Bearer {}", self.config.api_key));
-        }
-        for (key, value) in &self.config.extra_headers {
-            request = request.header(key.as_str(), value.as_str());
-        }
-        let request = request.json(body);
-        let response = send_with_transient_retry(request).await?;
+        let response = send_with_transient_retry_or_direct(
+            self.post_request(&self.client, url, body, true),
+            &self.direct_client,
+            |client| self.post_request(client, url, body, true),
+        )
+        .await?;
         let status = response.status();
         if !status.is_success() {
             let body_text = response
@@ -566,9 +591,11 @@ mod tests {
         let mut cfg = config();
         cfg.base_url = format!("http://{address}/v1");
         // Do not inherit machine-specific proxy settings or the global cache.
+        let direct = reqwest::Client::builder().no_proxy().build().unwrap();
         let provider = OpenAICompatibleOmni {
             config: cfg,
-            client: reqwest::Client::builder().no_proxy().build().unwrap(),
+            client: direct.clone(),
+            direct_client: direct,
         };
         (provider, release, server)
     }

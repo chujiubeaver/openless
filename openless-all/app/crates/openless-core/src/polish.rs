@@ -1682,6 +1682,16 @@ pub fn http_client_builder(base_url: &str, timeout_secs: u64) -> reqwest::Client
     }
 }
 
+/// Same handshake/timeout policy as [`http_client_builder`] but always direct:
+/// the failover route for when the system-proxy path cannot complete a
+/// handshake (a dead or misconfigured proxy must not cost a finished recording).
+pub fn http_client_builder_direct(timeout_secs: u64) -> reqwest::ClientBuilder {
+    reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(8))
+        .timeout(Duration::from_secs(timeout_secs))
+        .no_proxy()
+}
+
 /// Whether a TCP-handshake / request-writing phase network error is safe to retry.
 ///
 /// Only connect / request failures (the server definitely never received the request)
@@ -1713,28 +1723,78 @@ fn should_retry_transient(is_connect: bool, is_request: bool, is_timeout: bool) 
 pub(crate) async fn send_with_transient_retry(
     request: reqwest::RequestBuilder,
 ) -> Result<reqwest::Response, LLMError> {
+    send_with_transient_retry_inner::<fn(&reqwest::Client) -> reqwest::RequestBuilder>(
+        request, None,
+    )
+    .await
+}
+
+/// Same as [`send_with_transient_retry`], but when every attempt failed in the
+/// connect phase (TCP/TLS handshake never completed — a dead or misconfigured
+/// system proxy is the common cause), one more attempt goes out on `direct`,
+/// a no-proxy client, rebuilt by `rebuild`.
+///
+/// Connect-phase failures prove the request never reached the server, so
+/// switching route cannot duplicate a completion or billing; read/response
+/// timeouts keep the no-retry rule from #680. This is what keeps a finished
+/// recording from being lost to a broken proxy while a direct route works.
+pub(crate) async fn send_with_transient_retry_or_direct<F>(
+    request: reqwest::RequestBuilder,
+    direct: &reqwest::Client,
+    rebuild: F,
+) -> Result<reqwest::Response, LLMError>
+where
+    F: Fn(&reqwest::Client) -> reqwest::RequestBuilder,
+{
+    send_with_transient_retry_inner(request, Some((direct, rebuild))).await
+}
+
+async fn send_with_transient_retry_inner<F>(
+    request: reqwest::RequestBuilder,
+    failover: Option<(&reqwest::Client, F)>,
+) -> Result<reqwest::Response, LLMError>
+where
+    F: Fn(&reqwest::Client) -> reqwest::RequestBuilder,
+{
     const RETRY_DELAY_MS: u64 = 500;
-    let Some(initial) = request.try_clone() else {
+    let outcome = match request.try_clone() {
         // try_clone failed (e.g. stream body is not cloneable) -> skip retry, send once.
         // expect() would panic and kill the process; fall back to a single send.
-        log::warn!("[llm] request body not clonable, skipping retry");
-        return match request.send().await {
-            Ok(r) => Ok(r),
-            Err(e) => Err(llm_error_from_reqwest(e)),
-        };
-    };
-    match initial.send().await {
-        Ok(r) => Ok(r),
-        Err(e) if should_retry_transient(e.is_connect(), e.is_request(), e.is_timeout()) => {
-            let failure = crate::net::request_error_kind(&e);
-            log::warn!("[llm] send transient {failure} failure, retry in {RETRY_DELAY_MS}ms");
-            tokio::time::sleep(Duration::from_millis(RETRY_DELAY_MS)).await;
-            match request.send().await {
-                Ok(r) => Ok(r),
-                Err(e2) => Err(llm_error_from_reqwest(e2)),
-            }
+        None => {
+            log::warn!("[llm] request body not clonable, skipping retry");
+            request.send().await
         }
-        Err(e) => Err(llm_error_from_reqwest(e)),
+        Some(initial) => match initial.send().await {
+            Ok(r) => Ok(r),
+            Err(e) if should_retry_transient(e.is_connect(), e.is_request(), e.is_timeout()) => {
+                let failure = crate::net::request_error_kind(&e);
+                log::warn!("[llm] send transient {failure} failure, retry in {RETRY_DELAY_MS}ms");
+                tokio::time::sleep(Duration::from_millis(RETRY_DELAY_MS)).await;
+                request.send().await
+            }
+            Err(e) => Err(e),
+        },
+    };
+    match outcome {
+        Ok(response) => Ok(response),
+        Err(error) => {
+            if error.is_connect() {
+                if let Some((direct, rebuild)) = failover {
+                    let failure = crate::net::request_error_kind(&error);
+                    log::warn!(
+                        "[llm] connect-phase {failure} failure on the configured route; one direct (no-proxy) attempt"
+                    );
+                    // A single direct attempt (no nested retry): total attempts
+                    // stay bounded at three, and this keeps the call graph
+                    // acyclic for the async transformer.
+                    return match rebuild(direct).send().await {
+                        Ok(response) => Ok(response),
+                        Err(direct_error) => Err(llm_error_from_reqwest(direct_error)),
+                    };
+                }
+            }
+            Err(llm_error_from_reqwest(error))
+        }
     }
 }
 
