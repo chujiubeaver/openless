@@ -344,9 +344,10 @@ const EXIT_ANIM_MS_CLASSIC = DEFAULT_CAPSULE_EXIT_MS;
 // ready and persisted to localStorage across sessions. Default 150ms, clamped [60,600].
 const WARMUP_MS_KEY = 'ol-capsule-warmup-ms';
 const WARMUP_MS_DEFAULT = 150;
-/** Transparent margin the compact lingering window keeps around the card so its
- *  drop shadow and rounded border are never clipped by the window edge. */
-const CARD_SHADOW_SLACK = 6;
+/** Transparent margin the compact lingering window keeps around the card so a
+ *  sub-pixel rounding can never clip its border. Kept small: the area is
+ *  invisible but still swallows clicks while the card lingers. */
+const CARD_WINDOW_SLACK = 2;
 function readWarmupMs(): number {
   if (typeof localStorage === 'undefined') return WARMUP_MS_DEFAULT;
   const raw = Number(localStorage.getItem(WARMUP_MS_KEY));
@@ -948,9 +949,9 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
     // Size comes from the card as rendered NOW — the lingering card carries
     // extra padding for its drag ring, so a size measured before the swap is
     // ~8px short and clips the bottom border (user report 2026-10). The slack
-    // leaves room for the card's drop shadow; the card is centered in it, so
-    // the insets shift by the same slack to keep the card's screen position.
-    const slack = CARD_SHADOW_SLACK;
+    // guards sub-pixel rounding; the card is centered in it, so the insets
+    // shift by the same slack to keep the card's screen position.
+    const slack = CARD_WINDOW_SLACK;
     const next = {
       width: Math.ceil(rect.width) + slack * 2,
       height: Math.ceil(rect.height) + slack * 2,
@@ -1049,8 +1050,8 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
           display: 'flex',
           flexDirection: 'column',
           alignItems: 'center',
-          // The card is centered in a window that carries CARD_SHADOW_SLACK on
-          // every side, so its drop shadow is never clipped by the window edge.
+          // The card is centered in a window that carries CARD_WINDOW_SLACK on
+          // every side, so rounding can never clip its border.
           justifyContent: 'center',
           boxSizing: 'border-box',
           background: 'transparent',

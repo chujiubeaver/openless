@@ -472,12 +472,16 @@
 }
 
 /* Every edge of the card is a drag handle (the padding ring), not just a top
-   strip; the wrapped text and the close button keep their own behavior. */
+   strip; the wrapped text and the close button keep their own behavior.
+   The lingering card floats alone over whatever is on screen, so the capsule's
+   drop shadow reads as a grey halo around it — the user asked for it gone
+   (during a session the card is clipped by the rail anyway and shows none). */
 .ol-live-translation-card[data-interactive='true'] {
   pointer-events: auto;
   padding: 12px 30px 12px 14px;
   cursor: grab;
   touch-action: none;
+  box-shadow: none;
 }
 
 .ol-live-translation-card[data-interactive='true']:active {
