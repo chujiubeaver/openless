@@ -790,14 +790,14 @@ mod platform {
             KEY_DOWN => {
                 let keycode = unsafe { CGEventGetIntegerValueField(event, KEYBOARD_EVENT_KEYCODE) };
                 if keycode == ESC_KEYCODE && super::capsule_menu_open() { return event; }
-                // Fn+Esc / Ctrl+Esc are permanent global shortcuts: they are reserved
-                // whether or not the capsule or a translation card is on screen, and
-                // are always consumed here so no application ever receives the bare
-                // Esc that follows the modifier. The press still routes through
-                // handle_key_down, which voids the Fn short-press candidate (so
-                // dismissing a card never starts a dictation) and reaches the cancel
-                // bridge — that bridge dismisses a lingering translation card first
-                // and otherwise cancels a live session.
+                // Fn+Esc / Ctrl+Esc / Cmd+Esc are permanent global shortcuts: they
+                // are reserved whether or not the capsule or a translation card is
+                // on screen, and are always consumed here so no application ever
+                // receives the bare Esc that follows the modifier. The press still
+                // routes through handle_key_down, which voids the Fn short-press
+                // candidate (so dismissing a card never starts a dictation) and
+                // reaches the cancel bridge — that bridge dismisses a lingering
+                // translation card first and otherwise cancels a live session.
                 //
                 // A bare Esc keeps its normal meaning: while a lingering card is on
                 // screen and no session is live it passes through to the focused app
@@ -806,6 +806,7 @@ mod platform {
                 if keycode == ESC_KEYCODE {
                     let flags = unsafe { CGEventGetFlags(event) };
                     let combo = (flags & FLAG_MASK_CONTROL) != 0
+                        || (flags & FLAG_MASK_COMMAND) != 0
                         || (flags & FLAG_MASK_SECONDARY_FN) != 0;
                     if combo {
                         handle_key_down(ctx, event);

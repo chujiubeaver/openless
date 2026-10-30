@@ -1454,7 +1454,7 @@ export const zhCN = {
       capsuleTranscriptFontSize: '原文字号',
       liveTranslationPreviewLabel: '实时英文翻译预览',
       liveTranslationPreviewDesc:
-        '录音期间在胶囊中实时显示所说内容的英文翻译，仅供查看，不插入文档、不进历史；录音结束后卡片保留可读，按 Fn+Esc 或 Ctrl+Esc、点右上角关闭、或开始新录音时清除。音频会额外实时发送到当前百炼渠道的翻译模型（qwen3.8-livetranslate-flash-realtime），使用同一 API Key，按音频时长计费。',
+        '录音期间在胶囊中实时显示所说内容的英文翻译，仅供查看，不插入文档、不进历史；录音结束后卡片保留可读，按 Fn+Esc、Ctrl+Esc 或 ⌘+Esc、点右上角关闭、或开始新录音时清除。音频会额外实时发送到当前百炼渠道的翻译模型（qwen3.8-livetranslate-flash-realtime），使用同一 API Key，按音频时长计费。',
       liveTranslationPreviewUnavailableOmni: '需要「多模态模式」且渠道为百炼（dashscope-omni）。',
       liveTranslationPreviewUnavailableStreaming: '当前识别已提供实时原文，此功能不生效。',
       capsuleDisplayModeLabel: '多屏胶囊',
