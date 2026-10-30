@@ -147,13 +147,20 @@ export function applyLiveTranslationEvent(
   if (event.kind.type !== 'live_translation_update') {
     return { ...state, sequence };
   }
-  // Once the card is lingering the session is over: late updates (notably the
-  // Unavailable emitted when the translation socket closes after the tail
-  // grace) must not wipe the snapshot — wiping it makes the capsule body flash
-  // for one exit-animation frame. A new session resets `lingering` first.
-  if (state.lingering) return { ...state, sequence };
   const payload = event.kind.payload as LiveTranslationUpdate | undefined;
   if (!payload || typeof payload.text !== 'string') return { ...state, sequence };
+  // Once the card is lingering the session is over, but the tail translation is
+  // still delivering its last words after `session.finish`: let the card finish
+  // filling in instead of freezing at whatever had arrived at key release (user
+  // request 2026-10-27 — the preview runs on in parallel with transcribe/polish).
+  // An Unavailable (socket teardown) or an empty snapshot must never wipe what
+  // the user is reading. A new session resets `lingering` first.
+  if (state.lingering) {
+    if (payload.status === 'unavailable' || payload.text === '') {
+      return { ...state, sequence };
+    }
+    return { ...state, sequence, text: payload.text };
+  }
   // Pre-arm signal: an empty streaming snapshot published as soon as the session
   // has a preview plan, so the capsule can size its window for the card before
   // any text exists. It carries no text and is cleared at every generation edge,

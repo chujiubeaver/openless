@@ -132,6 +132,24 @@ let late = lingerLiveTranslation(
 );
 late = applyLiveTranslationEvent(late, updateEvent(3, 'h', '', 'unavailable'));
 assert(late.text === 'keep me' && late.lingering, 'late unavailable keeps lingering card');
+// The tail translation keeps arriving AFTER the session ended (detached finish
+// task): a lingering card must keep filling in, not freeze at key-release text.
+let tail = lingerLiveTranslation(
+  applyLiveTranslationEvent(
+    applyLiveTranslationEvent(createLiveTranslationState(), startingEvent(1, 't')),
+    updateEvent(2, 't', 'first half'),
+  ),
+);
+assert(tail.lingering && tail.text === 'first half', 'card lingers at key release');
+tail = applyLiveTranslationEvent(tail, updateEvent(3, 't', 'first half and the final words'));
+assert(
+  tail.lingering && tail.text === 'first half and the final words',
+  'tail deltas keep filling the lingering card',
+);
+tail = applyLiveTranslationEvent(tail, updateEvent(4, 't', ''));
+assert(tail.text === 'first half and the final words', 'empty tail snapshot never wipes');
+tail = applyLiveTranslationEvent(tail, updateEvent(5, 't', '', 'unavailable'));
+assert(tail.text === 'first half and the final words', 'teardown after the tail never wipes');
 
 // A new session replaces the lingering snapshot (its first update overwrites).
 let lingered = lingerLiveTranslation(

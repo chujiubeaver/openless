@@ -51,10 +51,15 @@ pub const LIVE_TRANSLATION_TARGET_LANGUAGE: &str = "en";
 /// droppable: exceeding the cap stalls it instead of growing memory.
 pub const MAX_PENDING_TRANSLATION_AUDIO_BYTES: usize = 480_000;
 
-/// Tail-translation grace after the inner recording has stopped. The omni main
-/// path uploads the whole audio at this moment anyway, so waiting here does not
-/// delay the user-visible result.
-pub const LIVE_TRANSLATION_FINISH_GRACE: Duration = Duration::from_millis(1_500);
+/// Tail-translation window after the inner recording has stopped. `finish_soft`
+/// runs as a DETACHED task, so this bound never touches the main path's
+/// key-release → insert latency: the omni engine encodes and uploads while the
+/// preview keeps receiving. The 1.5 s window regularly cut off the server's
+/// final translated words after `session.finish` (log: "tail translation did
+/// not finish within 1.5s"), truncating the very text the user was reading;
+/// 8 s lets the tail finish in parallel while the main path proceeds, and costs
+/// nothing but an idle socket plus one small final message.
+pub const LIVE_TRANSLATION_FINISH_GRACE: Duration = Duration::from_millis(8_000);
 
 /// Frozen at session start: which channel pays for the preview and which
 /// language it translates into. Contains no secrets; the decorator resolves the
