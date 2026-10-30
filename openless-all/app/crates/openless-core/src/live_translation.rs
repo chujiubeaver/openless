@@ -648,9 +648,6 @@ impl AudioRecorder for LiveTranslationRecorder {
             log::warn!("[live-translation] event sink unavailable; preview disabled for this session");
             return self.inner.start(session_id, context, consumer, progress);
         };
-        // Pre-size the capsule window for the card before any text exists (see
-        // announce_planned); the first painted text must not resize it.
-        session.announce_planned();
         let inner = Arc::clone(&self.inner);
         let setup = Arc::clone(&self.setup);
         Box::pin(async move {
@@ -668,6 +665,12 @@ impl AudioRecorder for LiveTranslationRecorder {
             // PCM 86.6ms vs 109.3ms over 25/24 captures). The tee buffers PCM
             // from the very first chunk, so no audio is lost: the preview simply
             // attaches while the main path is already streaming.
+            // Pre-size the capsule window for the card once the capture is up,
+            // not while the microphone is opening: the arm triggers a native
+            // resize on the main thread, and that work does not belong in the
+            // capture bring-up window. Still ~2s before the first text, so the
+            // card's first paint never resizes the window underneath a frame.
+            session.announce_planned();
             setup.spawn_setup(session_id, plan, Arc::clone(&session));
             Ok(Box::new(LiveTranslationRecording {
                 inner: recording,

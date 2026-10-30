@@ -104,7 +104,15 @@ def main() -> int:
         on = sid in attached_sids
         if not on:
             run = s.get("run", -1)
-            on = bool(runs[run]["marked"]) if 0 <= run < len(runs) else False
+            # Only fall back to the coarse run-level heuristic when this run has
+            # NO exact markers at all; otherwise a run mixing preview-on and
+            # preview-off sessions would mislabel every off session as on.
+            if 0 <= run < len(runs):
+                marked_ids_in_run = any(
+                    ss.get("run") == run and ss_id in attached_sids
+                    for ss_id, ss in sessions.items()
+                )
+                on = False if marked_ids_in_run else bool(runs[run]["marked"])
         row = {
             "sid": sid[:8],
             "start": s["start"],

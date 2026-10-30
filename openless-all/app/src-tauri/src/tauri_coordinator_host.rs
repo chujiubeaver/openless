@@ -1678,6 +1678,14 @@ impl TauriCapsuleWindow {
             *self.state.drag_origin.lock() = None;
             *self.state.lingering_anchor.lock() = None;
             self.state.free_position.store(false, Ordering::SeqCst);
+            // A lingering card may have been dragged to another monitor, and it
+            // always resizes/moves the shared window away from the dock. The
+            // layout cache only compares monitor/style/rail snapshots, so an
+            // unchanged snapshot would skip repositioning and leave the NEXT
+            // session's voice animation at the dragged/compact spot — possibly
+            // on a different screen than the cursor. Drop the cache so the next
+            // present() always re-anchors to the target monitor.
+            self.invalidate_layout();
             let idle = self
                 .state
                 .snapshot
